@@ -99,7 +99,7 @@ fn bridge(args: &[String]) {
     // 行末変換やエコーを切る。close で DTR が落ちて ESP がリセットされないよう -hupcl。
     // 開いた直後に DTR/RTS を同時に落とす（USB-Serial-JTAG は DTR/RTS の遷移で ESP をリセットするため、
     // stty など別プロセスで開閉せず、ここで 1 回だけ開く）。
-    let port = fs::OpenOptions::new().write(true).open(serial_path).expect("serial open");
+    let port = fs::OpenOptions::new().read(true).write(true).open(serial_path).expect("serial open");
     unsafe {
         use std::os::fd::AsRawFd;
         let fd = port.as_raw_fd();
@@ -111,6 +111,14 @@ fn bridge(args: &[String]) {
         let bits: libc::c_int = libc::TIOCM_DTR | libc::TIOCM_RTS;
         libc::ioctl(fd, libc::TIOCMBIC, &bits);
     }
+    // ESP のログを流す（何が起きているか見えるように）。
+    let mut log_rx = port.try_clone().expect("clone serial");
+    thread::spawn(move || {
+        let mut buf = [0u8; 256];
+        while let Ok(n) = log_rx.read(&mut buf) {
+            let _ = std::io::stderr().write_all(&buf[..n]);
+        }
+    });
     let port = Arc::new(Mutex::new(port));
 
     let send = {
