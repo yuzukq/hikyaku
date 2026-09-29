@@ -186,7 +186,11 @@ async fn session<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '
             }
         }
     };
+    // `--features selftest` のときだけ定期的に "hello" を打鍵する（通常は何も送らない）。
     let typing = async {
+        if !cfg!(feature = "selftest") {
+            core::future::pending::<()>().await;
+        }
         Timer::after(Duration::from_secs(5)).await;
         loop {
             // h e l l o

@@ -8,6 +8,9 @@ version      = "0.1.0"
 name = "hikyaku-c3"
 path = "./src/bin/main.rs"
 
+[features]
+selftest = []
+
 [dependencies]
 esp-hal = { version = "~1.2.2", features = ["esp32c3", "log-04", "unstable"] }
 
