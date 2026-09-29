@@ -56,12 +56,20 @@ fn main() {
                 let raw = &buf[..len];
                 let t = start.elapsed().as_secs_f64();
                 print!("[{t:8.3}] {len}B: {}", hex(raw));
-                if let Some(r) = BootKeyboardReport::parse(raw) {
-                    let mods: Vec<_> = (0..8).filter(|i| r.modifiers >> i & 1 == 1).map(|i| MOD_NAMES[i]).collect();
-                    let keys: Vec<_> = r.pressed().map(|k| format!("{}(0x{k:02x})", usage_name(k))).collect();
-                    print!("  mods={mods:?} keys={keys:?}");
-                    if r.is_rollover_error() {
-                        print!("  [RollOver]");
+                // 記述子にレポート ID がある場合（先頭 1 バイトが ID）は簡易解釈。
+                match (raw.first(), len) {
+                    (Some(2), 6) => print!("  mouse btn={:#04x} dx={} dy={} wheel={} pan={}", raw[1], raw[2] as i8, raw[3] as i8, raw[4] as i8, raw[5] as i8),
+                    (Some(3), 3) => print!("  system usage={:#06x}", u16::from_le_bytes([raw[1], raw[2]])),
+                    (Some(4), 3) => print!("  consumer usage={:#06x}", u16::from_le_bytes([raw[1], raw[2]])),
+                    _ => {
+                        if let Some(r) = BootKeyboardReport::parse(raw) {
+                            let mods: Vec<_> = (0..8).filter(|i| r.modifiers >> i & 1 == 1).map(|i| MOD_NAMES[i]).collect();
+                            let keys: Vec<_> = r.pressed().map(|k| format!("{}(0x{k:02x})", usage_name(k))).collect();
+                            print!("  mods={mods:?} keys={keys:?}");
+                            if r.is_rollover_error() {
+                                print!("  [RollOver]");
+                            }
+                        }
                     }
                 }
                 println!();
