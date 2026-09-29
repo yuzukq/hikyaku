@@ -18,7 +18,9 @@
 ## Phase 2: BLE HID キーボードとして Mac につなぐ
 
 - [x] BLE HID（キーボード / マウス / コンシューマの固定記述子）を C3 で実装、Linux (BlueZ) と JustWorks ペアリング成功
-- [ ] Linux 側で打鍵（`hello`）の到着を確認する
+- [x] Linux 側で入力レポートの到着を確認（PC → ESP の USB シリアル → BLE → Linux の hidraw）
+- [x] `hid-probe bridge` で実キーボードの hidraw を ESP のシリアルへ中継する仕組み（C3 は USB ホスト不可のため PC が暫定の読み取り役）
+  - 注意: ESP のシリアルポートは開くたびにリセットされる。**先にブリッジを起動 → 数秒待ってから Mac を接続**
 - [ ] Mac とペアリングして入力されることを確認する
 - [ ] ボンディング情報をフラッシュに保存する（現状 `bonded=false`。再起動のたびに再ペアリングになる）
 

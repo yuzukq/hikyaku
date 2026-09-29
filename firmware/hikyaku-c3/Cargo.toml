@@ -46,6 +46,7 @@ esp-radio = { version = "1.0.0-beta.1", features = [
 ] }
 trouble-host = { version = "0.7.0", features = ["gatt", "security", "log"] }
 embassy-futures = "0.1"
+embassy-sync = "0.7"
 
 critical-section = "1.2.0"
 static_cell      = "2.1.1"

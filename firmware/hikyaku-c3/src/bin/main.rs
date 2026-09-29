@@ -10,9 +10,12 @@
 use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::usb::usb_serial_jtag::UsbSerialJtag;
 use esp_radio::ble::controller::BleConnector;
 use log::{info, warn};
 use trouble_host::prelude::*;
@@ -52,6 +55,69 @@ const REPORT_MAP: [u8; 149] = [
     0x75,0x10, 0x95,0x01, 0x81,0x00, 0xC0,
 ];
 
+/// PC（暫定の USB ホスト役）から USB シリアルで届く HID レポート。
+/// 行形式: `K<16桁hex>`（キーボード 8B）/ `M<10桁hex>`（マウス 5B）/ `C<4桁hex>`（コンシューマ 2B）
+#[derive(Clone, Copy)]
+enum Report {
+    Key([u8; 8]),
+    Mouse([u8; 5]),
+    Consumer([u8; 2]),
+}
+
+static REPORTS: Channel<CriticalSectionRawMutex, Report, 32> = Channel::new();
+
+fn parse_hex<const N: usize>(s: &[u8]) -> Option<[u8; N]> {
+    if s.len() != N * 2 {
+        return None;
+    }
+    let nib = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = [0u8; N];
+    for i in 0..N {
+        out[i] = nib(s[2 * i])? << 4 | nib(s[2 * i + 1])?;
+    }
+    Some(out)
+}
+
+fn parse_line(line: &[u8]) -> Option<Report> {
+    let (kind, body) = line.split_first()?;
+    match kind {
+        b'K' => parse_hex::<8>(body).map(Report::Key),
+        b'M' => parse_hex::<5>(body).map(Report::Mouse),
+        b'C' => parse_hex::<2>(body).map(Report::Consumer),
+        _ => None,
+    }
+}
+
+#[embassy_executor::task]
+async fn serial_rx(mut rx: esp_hal::usb::usb_serial_jtag::UsbSerialJtagRx<'static, esp_hal::Async>) {
+    let mut line = [0u8; 32];
+    let mut len = 0;
+    let mut buf = [0u8; 64];
+    loop {
+        let Ok(n) = embedded_io_async::Read::read(&mut rx, &mut buf).await else { continue };
+        for &b in &buf[..n] {
+            match b {
+                b'\n' | b'\r' => {
+                    if len > 0 {
+                        match parse_line(&line[..len]) {
+                            Some(r) => {
+                                let _ = REPORTS.try_send(r);
+                            }
+                            None => warn!("bad line ({} bytes)", len),
+                        }
+                    }
+                    len = 0;
+                }
+                _ if len < line.len() => {
+                    line[len] = b;
+                    len += 1;
+                }
+                _ => len = 0,
+            }
+        }
+    }
+}
+
 #[gatt_server]
 struct Server {
     hid: HidService,
@@ -89,7 +155,7 @@ struct BatteryService {
 }
 
 #[esp_rtos::main]
-async fn main(_spawner: Spawner) -> ! {
+async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -99,6 +165,9 @@ async fn main(_spawner: Spawner) -> ! {
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
+
+    let (rx, _tx) = UsbSerialJtag::new(peripherals.USB_DEVICE).into_async().split();
+    spawner.spawn(serial_rx(rx).unwrap());
 
     let transport = BleConnector::new(peripherals.BT, Default::default()).unwrap();
     let controller = ExternalController::<_, 1>::new(transport);
@@ -118,6 +187,17 @@ async fn main(_spawner: Spawner) -> ! {
         appearance: &appearance::human_interface_device::KEYBOARD,
     }))
     .unwrap();
+
+    info!(
+        "handles: kbd={}/{:?} leds={} mouse={}/{:?} consumer={}/{:?}",
+        server.hid.keyboard_in.handle,
+        server.hid.keyboard_in.cccd_handle,
+        server.hid.keyboard_leds.handle,
+        server.hid.mouse_in.handle,
+        server.hid.mouse_in.cccd_handle,
+        server.hid.consumer_in.handle,
+        server.hid.consumer_in.cccd_handle,
+    );
 
     let app = async {
         loop {
@@ -178,30 +258,49 @@ async fn session<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '
                     info!("pairing complete: {:?} bonded={}", security_level, bond.is_some());
                 }
                 GattConnectionEvent::PairingFailed(e) => warn!("pairing failed: {:?}", e),
-                GattConnectionEvent::Gatt { event } => match event.accept() {
-                    Ok(reply) => reply.send().await,
-                    Err(e) => warn!("gatt error: {:?}", e),
-                },
+                GattConnectionEvent::Gatt { event } => {
+                    match &event {
+                        GattEvent::Write(w) => w.with_data(|_, d| info!("gatt write handle={} data={:?}", w.handle(), d)),
+                        GattEvent::Read(r) => info!("gatt read handle={}", r.handle()),
+                        _ => {}
+                    }
+                    match event.accept() {
+                        Ok(reply) => reply.send().await,
+                        Err(e) => warn!("gatt error: {:?}", e),
+                    }
+                }
                 _ => {}
             }
         }
     };
-    // `--features selftest` のときだけ定期的に "hello" を打鍵する（通常は何も送らない）。
-    let typing = async {
-        if !cfg!(feature = "selftest") {
-            core::future::pending::<()>().await;
-        }
-        Timer::after(Duration::from_secs(5)).await;
-        loop {
-            // h e l l o
-            for key in [0x0b_u8, 0x08, 0x0f, 0x0f, 0x12] {
-                let _ = server.hid.keyboard_in.notify(conn, &[0, 0, key, 0, 0, 0, 0, 0], false).await;
-                Timer::after(Duration::from_millis(30)).await;
-                let _ = server.hid.keyboard_in.notify(conn, &[0; 8], false).await;
-                Timer::after(Duration::from_millis(30)).await;
-            }
+    // 接続前に溜まったレポートは捨てる（古い押下が残って暴走しないように）。
+    REPORTS.clear();
+    let forward = async {
+        if cfg!(feature = "selftest") {
+            // `--features selftest`: 5 秒おきに "hello" を打鍵する。
             Timer::after(Duration::from_secs(5)).await;
+            loop {
+                for key in [0x0b_u8, 0x08, 0x0f, 0x0f, 0x12] {
+                    let _ = server.hid.keyboard_in.notify(conn, &[0, 0, key, 0, 0, 0, 0, 0], false).await;
+                    Timer::after(Duration::from_millis(30)).await;
+                    let _ = server.hid.keyboard_in.notify(conn, &[0; 8], false).await;
+                    Timer::after(Duration::from_millis(30)).await;
+                }
+                Timer::after(Duration::from_secs(5)).await;
+            }
+        }
+        loop {
+            let r = REPORTS.receive().await;
+            info!("forward report");
+            let res = match r {
+                Report::Key(v) => server.hid.keyboard_in.notify(conn, &v, false).await,
+                Report::Mouse(v) => server.hid.mouse_in.notify(conn, &v, false).await,
+                Report::Consumer(v) => server.hid.consumer_in.notify(conn, &v, false).await,
+            };
+            if let Err(e) = res {
+                warn!("notify failed: {:?}", e);
+            }
         }
     };
-    embassy_futures::select::select(events, typing).await;
+    embassy_futures::select::select(events, forward).await;
 }
