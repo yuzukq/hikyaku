@@ -13,7 +13,10 @@ use embassy_futures::join::join;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
+use bond_store::BondStore;
+use core::cell::RefCell;
 use esp_hal::clock::CpuClock;
+use esp_storage::FlashStorage;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::usb::otg::{embassy_usb_host::Driver as HostDriver, Usb};
 
@@ -32,6 +35,8 @@ use trouble_host::prelude::*;
 use esp_backtrace as _;
 
 extern crate alloc;
+
+mod bond_store;
 
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 3;
@@ -199,6 +204,13 @@ async fn main(spawner: Spawner) -> ! {
         .set_random_address(address)
         .set_io_capabilities(IoCapabilities::NoInputNoOutput)
         .build();
+    // 保存済みのペア情報を復元する（Mac 側で削除しない限り、再起動後も再ペアリング不要）。
+    let store = RefCell::new(BondStore::load(FlashStorage::new(peripherals.FLASH)));
+    for bond in store.borrow().bonds() {
+        if let Err(e) = stack.add_bond_information(bond.clone()) {
+            warn!("restore bond failed: {:?}", e);
+        }
+    }
     let mut peripheral = stack.peripheral();
     let mut runner = stack.runner();
 
@@ -224,8 +236,10 @@ async fn main(spawner: Spawner) -> ! {
             match advertise(&mut peripheral, &server).await {
                 Ok(conn) => {
                     info!("connected");
+                    // ボンディングを許可（これが無いと PairingComplete の bond が None になり保存されない）。
+                    let _ = conn.raw().set_bondable(true);
                     let _ = conn.raw().request_security();
-                    session(&server, &conn).await;
+                    session(&server, &conn, &store).await;
                     info!("disconnected");
                 }
                 Err(e) => {
@@ -265,8 +279,12 @@ async fn advertise<'v, 's, C: Controller>(
     Ok(conn)
 }
 
-/// 接続中の処理。GATT イベントを捌きつつ、テスト用に定期的に "hello" を打鍵する。
-async fn session<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '_, P>) {
+/// 接続中の処理。GATT イベントを捌きつつ、USB キーボードのレポートを BLE へ流す。
+async fn session<P: PacketPool>(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, P>,
+    store: &RefCell<BondStore<'_>>,
+) {
     let events = async {
         loop {
             match conn.next().await {
@@ -276,6 +294,9 @@ async fn session<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '
                 }
                 GattConnectionEvent::PairingComplete { security_level, bond } => {
                     info!("pairing complete: {:?} bonded={}", security_level, bond.is_some());
+                    if let Some(bond) = bond {
+                        store.borrow_mut().save(bond);
+                    }
                 }
                 GattConnectionEvent::PairingFailed(e) => warn!("pairing failed: {:?}", e),
                 GattConnectionEvent::Gatt { event } => {
