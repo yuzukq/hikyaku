@@ -12,8 +12,8 @@
 ## Phase 1: USB ホストでキーボードを読む
 
 - [x] 開発環境を決める → **Rust（esp-hal + embassy + trouble）**。`firmware/hikyaku-c3`
-- [ ] XIAO の 5V ピンに外部から 5V を入れ、OTG アダプタ経由でキーボードに給電する
-- [ ] キーボードの HID レポートを UART に出す（ブートプロトコル 8 バイト）
+- [x] XIAO S3 の 5V ピンから給電し、C-to-C ケーブルでキーボード (7skb) を接続（2026-10-09 動作確認。CC ピンの問題なし）
+- [x] USB ホストでキーボードを認識し、ブートプロトコルの入力を読む（UART ログ: `usb: keyboard ready`）
 
 ## Phase 2: BLE HID キーボードとして Mac につなぐ
 
@@ -26,7 +26,7 @@
 
 ## Phase 3: パススルー（MVP）
 
-- [~] Phase 1 と 2 を結合し、USB キーボードの入力を Mac へ中継する（PC を USB ホスト役にして経路は確認済み。マイコン単独での USB ホストは未対応）
+- [ ] 同じ構成で Mac に中継し、遅延や取りこぼしを確認する
 - [ ] 遅延や取りこぼしを体感で確認する
 
 ## Phase 4: トラックパッド統合
@@ -54,7 +54,8 @@
 
 ## S3 での USB ホスト検証（2026-10-08〜）
 
-- `firmware/hikyaku-s3`: USB ホストでブートキーボードを読み BLE へ中継（コードは書いた。実機は未確認）
+- `firmware/hikyaku-s3`: USB ホストでブートキーボードを読み BLE へ中継（**実機確認済み**）
+  - 未対応: キーボードの IF2（マウス・メディアキー）、ボンディング保存
 - `firmware/uart-bridge-c3`: 手元の C3 を UART→USB 変換器にする（CH9102 の代用）
   - 配線: S3 D6(TX) → C3 D7(GPIO20) / GND 共通 / C3 の 5V → S3 の 5V（S3 とキーボードへの給電を兼ねる）
   - S3 のログは UART 出力（`esp-println` の `uart` feature）。ホスト動作中は USB シリアルが使えないため
