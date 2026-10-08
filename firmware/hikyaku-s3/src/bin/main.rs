@@ -21,11 +21,13 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::usb::otg::{embassy_usb_host::Driver as HostDriver, Usb};
 
 use embassy_futures::select::{select, Either};
-use embassy_usb_driver::host::DeviceEvent;
+use embassy_usb_driver::host::{pipe, DeviceEvent, UsbHostAllocator, UsbPipe};
+use embassy_usb_driver::{EndpointInfo, EndpointType};
 use embassy_usb_host::{
     bus,
     class::kbd::{KbdEvent, KbdHandler},
-    handler::{BusRoute, HandlerEvent},
+    control::SetupPacket,
+    handler::{BusRoute, EnumerationInfo, HandlerEvent},
     BusState,
 };
 use esp_radio::ble::controller::BleConnector;
@@ -73,13 +75,74 @@ const REPORT_MAP: [u8; 149] = [
 #[derive(Clone, Copy)]
 enum Report {
     Key([u8; 8]),
-    #[allow(dead_code)]
     Mouse([u8; 5]),
-    #[allow(dead_code)]
     Consumer([u8; 2]),
 }
 
 static REPORTS: Channel<CriticalSectionRawMutex, Report, 32> = Channel::new();
+
+
+/// キーボードの「マウス + コンシューマ（音量など）」インターフェースを探して、
+/// その割り込み IN パイプを開く。レポート記述子の先頭が Generic Desktop / Mouse のものを選ぶ
+/// （QMK の raw HID など、他の HID インターフェースと区別するため）。
+/// ブートキーボード側で SET_CONFIGURATION 済みである前提（ここでは設定し直さない）。
+async fn open_media_pipe<'d, A: UsbHostAllocator<'d>>(
+    alloc: &A,
+    info: &EnumerationInfo,
+) -> Option<A::Pipe<pipe::Interrupt, pipe::In>> {
+    let mut ctrl = alloc
+        .alloc_pipe::<pipe::Control, pipe::InOut>(
+            info.device_address,
+            &EndpointInfo {
+                addr: 0.into(),
+                ep_type: EndpointType::Control,
+                max_packet_size: (info.device_desc.max_packet_size0 as u16).min(info.speed().max_packet_size()),
+                interval_ms: 0,
+            },
+            info.split(),
+        )
+        .ok()?;
+
+    let mut cfg_buf = [0u8; 512];
+    let cfg = info.active_config_or_set_default(&mut ctrl, &mut cfg_buf).await.ok()?;
+
+    for iface in cfg.iter_interface() {
+        // HID クラスで、ブートキーボード(subclass 1 / protocol 1)以外。
+        if iface.interface_class != 0x03 || (iface.interface_subclass == 1 && iface.interface_protocol == 1) {
+            continue;
+        }
+        let desc_len = iface.iter_descriptors().find_map(|(_, d)| {
+            (d.len() >= 7 && d[1] == 0x21).then(|| u16::from_le_bytes([d[5], d[6]]))
+        })?;
+        let mut rd = [0u8; 256];
+        let len = (desc_len as usize).min(rd.len());
+        let setup = SetupPacket::get_hid_report_descriptor(iface.interface_number, len as u16);
+        let n = ctrl.control_in(&setup.to_bytes(), &mut rd[..len]).await.ok()?;
+        if !rd[..n].starts_with(&[0x05, 0x01, 0x09, 0x02]) {
+            continue;
+        }
+        let ep = iface
+            .iter_endpoints()
+            .find(|e| e.ep_type() == EndpointType::Interrupt && e.ep_dir() == embassy_usb_driver::Direction::In)?;
+        info!("usb: media interface {} (report desc {} bytes)", iface.interface_number, n);
+        return alloc
+            .alloc_pipe::<pipe::Interrupt, pipe::In>(info.device_address, &ep.into(), info.split())
+            .ok();
+    }
+    None
+}
+
+/// IF2 のレポート（先頭 1 バイトがレポート ID）を BLE 用のレポートに変換する。
+///   ID2: マウス (buttons, x, y, wheel, pan) → そのまま
+///   ID4: コンシューマ (usage 16bit)        → こちらの ID3 へ
+///   ID3: システムコントロール（電源/スリープ）は BLE 側の記述子に無いので捨てる
+fn media_report(buf: &[u8]) -> Option<Report> {
+    match (buf.first()?, buf.len()) {
+        (2, 6) => Some(Report::Mouse([buf[1], buf[2], buf[3], buf[4], buf[5]])),
+        (4, 3) => Some(Report::Consumer([buf[1], buf[2]])),
+        _ => None,
+    }
+}
 
 /// USB ホスト：つながったキーボード（ブートプロトコル）を読んで REPORTS に流す。
 #[embassy_executor::task]
@@ -116,9 +179,30 @@ async fn usb_host(usb: Usb<'static>) {
         };
         info!("usb: keyboard ready");
 
+        let mut media = open_media_pipe(&handle, &info).await;
+        if media.is_none() {
+            info!("usb: no media interface (volume/mouse keys will not be forwarded)");
+        }
+        let mut mbuf = [0u8; 16];
+
         loop {
-            match select(kbd.wait_for_event(), ctrl.wait_for_device_event()).await {
-                Either::First(Ok(HandlerEvent::HandlerEvent(KbdEvent::KeyStatusUpdate(u)))) => {
+            let media_in = async {
+                match media.as_mut() {
+                    Some(pipe) => pipe.request_in(&mut mbuf).await,
+                    None => core::future::pending().await,
+                }
+            };
+            match select(select(kbd.wait_for_event(), media_in), ctrl.wait_for_device_event()).await {
+                Either::First(Either::Second(Ok(n))) => {
+                    if let Some(r) = media_report(&mbuf[..n]) {
+                        let _ = REPORTS.try_send(r);
+                    }
+                }
+                Either::First(Either::Second(Err(e))) => {
+                    warn!("usb: media read error: {:?}", e);
+                    break;
+                }
+                Either::First(Either::First(Ok(HandlerEvent::HandlerEvent(KbdEvent::KeyStatusUpdate(u))))) => {
                     let mut r = [0u8; 8];
                     r[0] = u.modifiers;
                     for (dst, k) in r[2..].iter_mut().zip(u.keypress.iter()) {
@@ -126,9 +210,9 @@ async fn usb_host(usb: Usb<'static>) {
                     }
                     let _ = REPORTS.try_send(Report::Key(r));
                 }
-                Either::First(Ok(HandlerEvent::HandlerDisconnected)) => break,
-                Either::First(Ok(HandlerEvent::NoChange)) => {}
-                Either::First(Err(e)) => {
+                Either::First(Either::First(Ok(HandlerEvent::HandlerDisconnected))) => break,
+                Either::First(Either::First(Ok(HandlerEvent::NoChange))) => {}
+                Either::First(Either::First(Err(e))) => {
                     warn!("usb: read error: {:?}", e);
                     break;
                 }
@@ -138,8 +222,10 @@ async fn usb_host(usb: Usb<'static>) {
         }
         info!("usb: keyboard detached");
         handle.free_address(info.device_address);
-        // 押しっぱなしのキーが残らないよう全解放を送る。
+        // 押しっぱなしが残らないよう全解放を送る。
         let _ = REPORTS.try_send(Report::Key([0; 8]));
+        let _ = REPORTS.try_send(Report::Mouse([0; 5]));
+        let _ = REPORTS.try_send(Report::Consumer([0; 2]));
     }
 }
 

@@ -7,7 +7,6 @@
 //! レイアウト: "HKB1" | count:u8 | (len:u16le | postcard(BondInformation)) × count
 
 use alloc::vec::Vec;
-use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use esp_storage::FlashStorage;
 use log::{info, warn};
 use trouble_host::prelude::BondInformation;
