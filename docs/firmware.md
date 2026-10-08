@@ -54,6 +54,14 @@ rustup target add riscv32imc-unknown-none-elf                          # C3 を�
 
 `espup install` は GitHub API のレート制限（403）にかかるので `GITHUB_TOKEN` を渡す。
 
+## 現在 S3 に書き込まれているファーム
+
+メディアキー対応版（`4818abd` 相当、`trackpad` feature なし）。ボンディング保存つき。
+`firmware/hikyaku-s3/target/` の成果物は、最後にビルドしたものに上書きされる（`--features trackpad` を試すと、そちらになる）。
+書き込む前に、目的のビルドをやり直すこと。
+
+既知の課題: `forward report` / `gatt read|write` のログが `info!` で出ていて冗長（打鍵のたびに出る）。次に書き込むときに `debug!` へ下げる。
+
 ## 書き込み（S3）
 
 S3 は 3 秒後に USB ホストになり、USB シリアル/JTAG が消える。

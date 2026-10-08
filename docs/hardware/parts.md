@@ -24,7 +24,7 @@
 | 部品 | 型番 | 状況 | 用途 |
 |---|---|---|---|
 | USB-シリアル変換 | 秋月 AE-CH9102F-TYPEC-BO | ✅ 手元 | S3 のログ取得 + 開発中の給電（[usb-serial-ch9102f.md](usb-serial-ch9102f.md)） |
-| XIAO ESP32-C3 | — | ✅ 手元（予備） | 初期の BLE 検証に使用。UART→USB 変換器ファームも作ってある（`firmware/uart-bridge-c3`）が CH9102F があれば不要 |
+| XIAO ESP32-C3 | — | ✅ 手元（予備） | 初期の BLE 検証に使用。現在は `firmware/uart-bridge-c3`（UART→USB 変換器）が書き込まれたまま。CH9102F があるので不要 |
 | ブレッドボード・ジャンパ・ピンヘッダ | — | ✅ | |
 
 ## トラックパッド接続（未調達）

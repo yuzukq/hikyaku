@@ -9,6 +9,7 @@
 | [hardware/trackpad-tm035035.md](hardware/trackpad-tm035035.md) | トラックパッド TM035035 の仕様メモ |
 | [keyboard-7skb.md](keyboard-7skb.md) | 対象キーボード 7skb の USB/HID 構成 |
 | [firmware.md](firmware.md) | ファームウェアの構成・ビルド・書き込み・デバッグ・落とし穴 |
+| [design/multi-host.md](design/multi-host.md) | 2 台のマシンの切り替え（検討中の設計メモ） |
 | [reference/datasheets.md](reference/datasheets.md) | データシート等へのリンクと保管場所 |
 
 進捗と今後の計画は [../ROADMAP.md](../ROADMAP.md)、全体像は [../README.md](../README.md)。
