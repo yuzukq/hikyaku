@@ -59,7 +59,7 @@
 
 ## 未決事項
 
-- ~~C3 の USB ホスト問題の解決策~~ → **XIAO ESP32-S3 を再調達する**（2026-09-29 決定）。S3 とトラックパッド到着待ち
+- ~~C3 の USB ホスト問題の解決策~~ → **XIAO ESP32-S3 を再調達する**（2026-09-29 決定）。S3 は 2026-10-08 に到着。`firmware/hikyaku-s3`（Xtensa は `espup` + `. ~/export-esp.sh` が必要）で C3 と同じ BLE HID が動作確認済み
 
 - Arduino と ESP-IDF のどちらで作るか
 - TM035035 の接続方式（SPI / I2C）
