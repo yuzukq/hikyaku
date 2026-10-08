@@ -60,14 +60,20 @@
 - [ ] 分割キーボードの間に置けるサイズでケースを設計する
 - [ ] 専用基板にするか検討する
 
-## Phase 8: 2 台のマシンの切り替え（検討中）
+## Phase 8: 2 台のマシンの切り替え（構想・後回し）
 
-設計メモ: [docs/design/multi-host.md](docs/design/multi-host.md)
+**後々ほしい機能として温めている構想。** トラックパッド統合（Phase 4）や電源（Phase 6）が一段落してから着手する。
 
-- [ ] 同時接続（2 接続）が ESP32-S3 + 現在の BLE スタックで成立するか検証
-- [ ] 切り替えキー（Ctrl+Alt+Shift+Gui+Enter+1/2）の検出と転送の切り替え
+要望: Mac と Windows を同時に使うので、`hikyaku-BLE1`（Mac 用）/ `hikyaku-BLE2`（Windows 用）のように入力先を切り替えたい。
+切り替えは 7sPro で `Alt+Ctrl+Win+Shift+Enter+1` → BLE1、`…+2` → BLE2。もっと良い 2 台運用の方法があれば取り入れる。
+
+設計メモ（方式の比較・注意点・進め方）: [docs/design/multi-host.md](docs/design/multi-host.md)
+
+- [ ] 同時接続（2 接続）が ESP32-S3 + 現在の BLE スタックで成立するか検証（Mac + Linux PC で試せる）
+- [ ] 切り替えキー（Ctrl+Alt+Shift+Gui+Enter+1/2）の検出と転送の切り替え（切り替え前に全キー解放を送る）
 - [ ] ボンディングのスロット化、ペアリングモードの名前（hikyaku-BLE1/2）
-- [ ] 状態表示（オンボード LED）
+- [ ] 状態表示（オンボード LED の点滅回数でスロットを示す）
+- [ ] トラックパッドのマウスレポートも同じ宛先へ送る
 - [ ] Windows での接続確認（Device Information サービスの要否）
 
 ## 未決事項
