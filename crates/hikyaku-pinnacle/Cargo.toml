@@ -1,0 +1,8 @@
+[package]
+name = "hikyaku-pinnacle"
+version = "0.1.0"
+edition = "2021"
+description = "Cirque Pinnacle (GlidePoint) trackpad driver over SPI (RAP), no_std / embedded-hal 1.0"
+
+[dependencies]
+embedded-hal = "1"

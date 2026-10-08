@@ -788,6 +788,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-hal-bus"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513e0b3a8fb7d3013a8ae17a834283f170deaf7d0eeab0a7c1a36ad4dd356d22"
+dependencies = [
+ "critical-section",
+ "embedded-hal 1.0.0",
+]
+
+[[package]]
 name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1543,6 +1553,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hikyaku-pinnacle"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+]
+
+[[package]]
+name = "hikyaku-pointer"
+version = "0.1.0"
+
+[[package]]
 name = "hikyaku-s3"
 version = "0.1.0"
 dependencies = [
@@ -1554,6 +1575,7 @@ dependencies = [
  "embassy-time",
  "embassy-usb-driver",
  "embassy-usb-host",
+ "embedded-hal-bus",
  "embedded-io 0.7.1",
  "embedded-io-async 0.7.0",
  "esp-alloc",
@@ -1564,6 +1586,8 @@ dependencies = [
  "esp-radio",
  "esp-rtos",
  "esp-storage",
+ "hikyaku-pinnacle",
+ "hikyaku-pointer",
  "log",
  "postcard",
  "static_cell",

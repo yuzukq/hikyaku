@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["crates/hikyaku-hid", "tools/hid-probe"]
+members = ["crates/hikyaku-hid", "crates/hikyaku-pinnacle", "crates/hikyaku-pointer", "tools/hid-probe"]
 exclude = ["firmware"]

@@ -1,0 +1,7 @@
+[package]
+name = "hikyaku-pointer"
+version = "0.1.0"
+edition = "2021"
+description = "Trackpad absolute positions -> mouse reports (move, accel, tap, drag, scroll). no_std, no dependencies"
+
+[dependencies]

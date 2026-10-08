@@ -39,6 +39,8 @@ use esp_backtrace as _;
 extern crate alloc;
 
 mod bond_store;
+#[cfg(feature = "trackpad")]
+mod trackpad;
 
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 3;
@@ -276,6 +278,26 @@ async fn main(spawner: Spawner) -> ! {
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
+
+    #[cfg(feature = "trackpad")]
+    {
+        use esp_hal::{
+            gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
+            spi::{master::{Config as SpiConfig, Spi}, Mode},
+            time::Rate,
+        };
+        let spi = Spi::new(
+            peripherals.SPI2,
+            SpiConfig::default().with_frequency(Rate::from_mhz(1)).with_mode(Mode::_1),
+        )
+        .unwrap()
+        .with_sck(peripherals.GPIO7)
+        .with_mosi(peripherals.GPIO9)
+        .with_miso(peripherals.GPIO8);
+        let cs = Output::new(peripherals.GPIO2, Level::High, OutputConfig::default());
+        let dr = Input::new(peripherals.GPIO1, InputConfig::default().with_pull(Pull::Down));
+        spawner.spawn(trackpad::run(spi, cs, dr).unwrap());
+    }
 
     let usb = Usb::new_fs(peripherals.USB_FS, peripherals.GPIO20, peripherals.GPIO19);
     spawner.spawn(usb_host(usb).unwrap());

@@ -10,6 +10,8 @@ path = "./src/bin/main.rs"
 
 [features]
 selftest = []
+# トラックパッド（SPI）。コネクタが届くまで既定では無効。
+trackpad = ["dep:hikyaku-pinnacle", "dep:hikyaku-pointer", "dep:embedded-hal-bus"]
 
 [dependencies]
 esp-hal = { version = "~1.2.2", features = ["esp32s3", "log-04", "unstable"] }
@@ -46,6 +48,9 @@ esp-radio = { version = "1.0.0-beta.1", features = [
 ] }
 trouble-host = { version = "0.7.0", features = ["gatt", "security", "log", "serde"] }
 embassy-futures = "0.1"
+embedded-hal-bus = { version = "0.3", optional = true }
+hikyaku-pinnacle = { path = "../../crates/hikyaku-pinnacle", optional = true }
+hikyaku-pointer = { path = "../../crates/hikyaku-pointer", optional = true }
 esp-storage = { version = "0.10", features = ["esp32s3", "embedded-storage"] }
 postcard = { version = "1.1", default-features = false }
 embassy-sync = "0.7"
