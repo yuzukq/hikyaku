@@ -15,7 +15,16 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::usb::usb_serial_jtag::UsbSerialJtag;
+use esp_hal::usb::otg::{embassy_usb_host::Driver as HostDriver, Usb};
+
+use embassy_futures::select::{select, Either};
+use embassy_usb_driver::host::DeviceEvent;
+use embassy_usb_host::{
+    bus,
+    class::kbd::{KbdEvent, KbdHandler},
+    handler::{BusRoute, HandlerEvent},
+    BusState,
+};
 use esp_radio::ble::controller::BleConnector;
 use log::{info, warn};
 use trouble_host::prelude::*;
@@ -55,66 +64,77 @@ const REPORT_MAP: [u8; 149] = [
     0x75,0x10, 0x95,0x01, 0x81,0x00, 0xC0,
 ];
 
-/// PC（暫定の USB ホスト役）から USB シリアルで届く HID レポート。
-/// 行形式: `K<16桁hex>`（キーボード 8B）/ `M<10桁hex>`（マウス 5B）/ `C<4桁hex>`（コンシューマ 2B）
+/// BLE へ流す HID レポート。
 #[derive(Clone, Copy)]
 enum Report {
     Key([u8; 8]),
+    #[allow(dead_code)]
     Mouse([u8; 5]),
+    #[allow(dead_code)]
     Consumer([u8; 2]),
 }
 
 static REPORTS: Channel<CriticalSectionRawMutex, Report, 32> = Channel::new();
 
-fn parse_hex<const N: usize>(s: &[u8]) -> Option<[u8; N]> {
-    if s.len() != N * 2 {
-        return None;
-    }
-    let nib = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
-    let mut out = [0u8; N];
-    for i in 0..N {
-        out[i] = nib(s[2 * i])? << 4 | nib(s[2 * i + 1])?;
-    }
-    Some(out)
-}
-
-fn parse_line(line: &[u8]) -> Option<Report> {
-    let (kind, body) = line.split_first()?;
-    match kind {
-        b'K' => parse_hex::<8>(body).map(Report::Key),
-        b'M' => parse_hex::<5>(body).map(Report::Mouse),
-        b'C' => parse_hex::<2>(body).map(Report::Consumer),
-        _ => None,
-    }
-}
-
+/// USB ホスト：つながったキーボード（ブートプロトコル）を読んで REPORTS に流す。
 #[embassy_executor::task]
-async fn serial_rx(mut rx: esp_hal::usb::usb_serial_jtag::UsbSerialJtagRx<'static, esp_hal::Async>) {
-    let mut line = [0u8; 32];
-    let mut len = 0;
-    let mut buf = [0u8; 64];
+async fn usb_host(usb: Usb<'static>) {
+    static BUS_STATE: BusState = BusState::new();
+    // ホストにすると USB シリアル/JTAG（書き込み用）が使えなくなる。
+    // 起動後しばらくは猶予を置き、その間なら espflash で書き換えられるようにする。
+    Timer::after(Duration::from_secs(3)).await;
+    let (mut ctrl, handle) = bus(HostDriver::new(usb), &BUS_STATE);
+    let mut cfg = [0u8; 256];
+
     loop {
-        let Ok(n) = embedded_io_async::Read::read(&mut rx, &mut buf).await else { continue };
-        for &b in &buf[..n] {
-            match b {
-                b'\n' | b'\r' => {
-                    if len > 0 {
-                        match parse_line(&line[..len]) {
-                            Some(r) => {
-                                let _ = REPORTS.try_send(r);
-                            }
-                            None => warn!("bad line ({} bytes)", len),
-                        }
+        info!("usb: waiting for device");
+        let speed = ctrl.wait_for_connection().await;
+        let info = match handle.enumerate(BusRoute::Direct(speed), &mut cfg).await {
+            Ok((info, _)) => info,
+            Err(e) => {
+                warn!("usb: enumerate failed: {:?}", e);
+                continue;
+            }
+        };
+        info!(
+            "usb: device {:04x}:{:04x} addr={}",
+            info.device_desc.vendor_id, info.device_desc.product_id, info.device_address
+        );
+
+        let mut kbd = match KbdHandler::try_register(&handle, &info).await {
+            Ok(k) => k,
+            Err(e) => {
+                warn!("usb: not a boot keyboard: {:?}", e);
+                handle.free_address(info.device_address);
+                continue;
+            }
+        };
+        info!("usb: keyboard ready");
+
+        loop {
+            match select(kbd.wait_for_event(), ctrl.wait_for_device_event()).await {
+                Either::First(Ok(HandlerEvent::HandlerEvent(KbdEvent::KeyStatusUpdate(u)))) => {
+                    let mut r = [0u8; 8];
+                    r[0] = u.modifiers;
+                    for (dst, k) in r[2..].iter_mut().zip(u.keypress.iter()) {
+                        *dst = k.map_or(0, |k| k.get());
                     }
-                    len = 0;
+                    let _ = REPORTS.try_send(Report::Key(r));
                 }
-                _ if len < line.len() => {
-                    line[len] = b;
-                    len += 1;
+                Either::First(Ok(HandlerEvent::HandlerDisconnected)) => break,
+                Either::First(Ok(HandlerEvent::NoChange)) => {}
+                Either::First(Err(e)) => {
+                    warn!("usb: read error: {:?}", e);
+                    break;
                 }
-                _ => len = 0,
+                Either::Second(DeviceEvent::Disconnected) => break,
+                Either::Second(_) => {}
             }
         }
+        info!("usb: keyboard detached");
+        handle.free_address(info.device_address);
+        // 押しっぱなしのキーが残らないよう全解放を送る。
+        let _ = REPORTS.try_send(Report::Key([0; 8]));
     }
 }
 
@@ -166,8 +186,8 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
-    let (rx, _tx) = UsbSerialJtag::new(peripherals.USB_DEVICE).into_async().split();
-    spawner.spawn(serial_rx(rx).unwrap());
+    let usb = Usb::new_fs(peripherals.USB_FS, peripherals.GPIO20, peripherals.GPIO19);
+    spawner.spawn(usb_host(usb).unwrap());
 
     let transport = BleConnector::new(peripherals.BT, Default::default()).unwrap();
     let controller = ExternalController::<_, 1>::new(transport);

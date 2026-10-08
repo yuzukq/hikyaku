@@ -36,7 +36,7 @@ esp-backtrace = { version = "0.20.0", features = [
   "panic-handler",
   "println",
 ] }
-esp-println = { version = "0.18.0", features = ["esp32s3", "log-04"] }
+esp-println = { version = "0.18.0", default-features = false, features = ["esp32s3", "log-04", "uart", "colors", "critical-section"] }
 esp-radio = { version = "1.0.0-beta.1", features = [
   "ble",
   "esp-alloc",
@@ -50,6 +50,8 @@ embassy-sync = "0.7"
 
 critical-section = "1.2.0"
 static_cell      = "2.1.1"
+embassy-usb-host = { version = "0.1", features = ["log"] }
+embassy-usb-driver = "0.2"
 
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
