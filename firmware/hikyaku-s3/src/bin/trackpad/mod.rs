@@ -1,7 +1,7 @@
 //! トラックパッド（Cirque Pinnacle, SPI）→ マウスレポート。`--features trackpad` のときだけ有効。
 //!
 //! 配線（docs/hardware/wiring.md）: SCK=GPIO12 / MISO=GPIO13 / MOSI=GPIO11 / SS=GPIO10 / DR=GPIO9（SPI2 の標準ピン + DR）。
-//! SPI モード 1、1MHz。疎通は実機で確認済み（2026-10-11）。
+//! SPI モード 1、250kHz（1MHz では読み取りエラーが多かった）。疎通は実機で確認済み（2026-10-11）。
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
