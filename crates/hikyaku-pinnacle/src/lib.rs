@@ -31,10 +31,10 @@ pub mod reg {
 
 /// Status1 のビット。
 pub mod status {
-    /// Software Command Complete
-    pub const SW_CC: u8 = 1 << 2;
-    /// Software Data Ready
-    pub const SW_DR: u8 = 1 << 3;
+    /// Software Data Ready（座標データが読める）。実機で確認: bit2。
+    pub const SW_DR: u8 = 1 << 2;
+    /// Software Command Complete（起動時の補正などの完了）。bit3。
+    pub const SW_CC: u8 = 1 << 3;
 }
 
 const WRITE: u8 = 0x80;
@@ -156,12 +156,15 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
         Ok(Info { firmware_id, firmware_version })
     }
 
-    /// 新しいサンプルがあれば読んで返す（DR フラグは Status1 で確認する）。
+    /// 新しいサンプルがあれば読んで返す。
+    ///
+    /// Status1 の SW_DR か SW_CC のどちらかが立っていればパケットを読み、フラグをクリアする
+    /// （クリアしないと Pinnacle は新しい座標を出さず、DR ピンが High に張り付く）。
+    /// それ以外のビットだけが立っているときは、クリアだけして `None`。
     /// DR ピンを見られるなら、ピンが立っているときだけ呼ぶと SPI の無駄打ちが減る。
     pub fn read_absolute(&mut self) -> Result<Option<AbsoluteData>, Error<SPI::Error>> {
         let st = self.read_reg(reg::STATUS1)?;
-        if st & status::SW_DR == 0 {
-            // データ以外のフラグ（SW_CC など）が立っていたら、クリアしてやらないと Pinnacle が止まる。
+        if st & (status::SW_DR | status::SW_CC) == 0 {
             if st != 0 {
                 self.clear_flags()?;
             }
@@ -292,13 +295,29 @@ mod tests {
     }
 
     #[test]
-    fn read_absolute_clears_stray_command_complete_flag() {
-        // 起動時の補正で SW_CC だけが立っている。データは無いが、クリアしないと DR が張り付く。
+    fn read_absolute_reads_and_clears_on_command_complete_too() {
+        // SW_CC だけが立っていても、読んでクリアする（ビットの割り当てを取り違えていても止まらないように）。
         let mut m = Mock::new();
         m.regs[reg::STATUS1 as usize] = status::SW_CC;
         let mut p = Pinnacle::new(m);
+        let a = p.read_absolute().unwrap().expect("packet");
+        assert!(!a.touching());
+        assert_eq!(p.release().regs[reg::STATUS1 as usize], 0, "flag cleared");
+    }
+
+    #[test]
+    fn read_absolute_clears_unknown_flags_without_data() {
+        let mut m = Mock::new();
+        m.regs[reg::STATUS1 as usize] = 0x01;
+        let mut p = Pinnacle::new(m);
         assert_eq!(p.read_absolute().unwrap(), None);
-        assert_eq!(p.release().regs[reg::STATUS1 as usize], 0, "stray flag cleared");
+        assert_eq!(p.release().regs[reg::STATUS1 as usize], 0);
+    }
+
+    #[test]
+    fn status_bits_match_hardware() {
+        assert_eq!(status::SW_DR, 0x04);
+        assert_eq!(status::SW_CC, 0x08);
     }
 
     #[test]
