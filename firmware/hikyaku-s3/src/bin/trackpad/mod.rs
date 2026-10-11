@@ -85,9 +85,10 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
         if last_log.elapsed() >= Duration::from_secs(1) {
             // 何も起きていない間は出さない（ログが流れすぎないように）
             if packets > 0 || reports > 0 || dr_high > 0 || read_errors > 0 {
+                let status1 = pad.read_reg(hikyaku_pinnacle::reg::STATUS1).ok();
                 info!(
-                    "trackpad: polls={} packets={} touching={} dr_high={} reports={} errors={} last(x,y,z)={:?}",
-                    polls, packets, touch_packets, dr_high, reports, read_errors, last_raw
+                    "trackpad: polls={} packets={} touching={} dr_high={} reports={} errors={} status1={:?} last(x,y,z)={:?}",
+                    polls, packets, touch_packets, dr_high, reports, read_errors, status1, last_raw
                 );
             }
             polls = 0;

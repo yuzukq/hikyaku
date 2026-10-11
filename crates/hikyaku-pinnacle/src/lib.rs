@@ -150,13 +150,21 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
         self.write_reg(reg::FEED_CONFIG2, FEED2_DISABLE_ALL_GESTURES)?;
         self.write_reg(reg::Z_IDLE, Z_IDLE_COUNT)?;
         self.write_reg(reg::FEED_CONFIG1, FEED_ENABLE | FEED_ABSOLUTE)?;
+        // 設定中に立った SW_CC（コマンド完了）などをクリアする。クリアしないと DR ピンが High のまま張り付き、
+        // Pinnacle は新しい座標を出さない。
+        self.clear_flags()?;
         Ok(Info { firmware_id, firmware_version })
     }
 
     /// 新しいサンプルがあれば読んで返す（DR フラグは Status1 で確認する）。
     /// DR ピンを見られるなら、ピンが立っているときだけ呼ぶと SPI の無駄打ちが減る。
     pub fn read_absolute(&mut self) -> Result<Option<AbsoluteData>, Error<SPI::Error>> {
-        if self.read_reg(reg::STATUS1)? & status::SW_DR == 0 {
+        let st = self.read_reg(reg::STATUS1)?;
+        if st & status::SW_DR == 0 {
+            // データ以外のフラグ（SW_CC など）が立っていたら、クリアしてやらないと Pinnacle が止まる。
+            if st != 0 {
+                self.clear_flags()?;
+            }
             return Ok(None);
         }
         let mut d = [0u8; 6];
@@ -272,14 +280,25 @@ mod tests {
         assert_eq!(m.regs[reg::FEED_CONFIG2 as usize], 0x1E);
         assert_eq!(m.regs[reg::Z_IDLE as usize], 5);
         assert_eq!(m.regs[reg::SYS_CONFIG1 as usize], 0x00);
-        // Feed を有効にするのは最後（設定が済んでから）
-        assert_eq!(m.writes.last(), Some(&(reg::FEED_CONFIG1, 0x03)));
+        // Feed を有効にした後、最後にフラグをクリアする（SW_CC が残ると Pinnacle が止まる）
+        assert_eq!(m.writes.last(), Some(&(reg::STATUS1, 0x00)));
+        assert_eq!(m.writes[m.writes.len() - 2], (reg::FEED_CONFIG1, 0x03));
     }
 
     #[test]
     fn read_absolute_returns_none_without_data_ready() {
         let mut p = Pinnacle::new(Mock::new());
         assert_eq!(p.read_absolute().unwrap(), None);
+    }
+
+    #[test]
+    fn read_absolute_clears_stray_command_complete_flag() {
+        // 起動時の補正で SW_CC だけが立っている。データは無いが、クリアしないと DR が張り付く。
+        let mut m = Mock::new();
+        m.regs[reg::STATUS1 as usize] = status::SW_CC;
+        let mut p = Pinnacle::new(m);
+        assert_eq!(p.read_absolute().unwrap(), None);
+        assert_eq!(p.release().regs[reg::STATUS1 as usize], 0, "stray flag cleared");
     }
 
     #[test]
