@@ -12,7 +12,7 @@
 - [x] モバイルバッテリー（Type-C 出力の小型品）、ブレッドボード、ジャンパ類
 - [x] 開発用の給電・ログを CH9102F に切り替え（C3 は不要に。2026-10-09 確認）
 - [ ] 5.1kΩ ×2（手元にあるか確認）
-- [ ] トラックパッド用の FFC ケーブル 12P 0.5mm + 変換基板（または基板パッドへ直接はんだ付け）
+- [x] トラックパッド用の FFC ケーブル 12P 0.5mm + 変換基板
 
 ## Phase 1: USB ホストでキーボードを読む ✅
 
@@ -33,11 +33,12 @@
 
 ## Phase 4: トラックパッド統合 ← 次
 
-- [ ] FFC 等の接続手段を調達（[docs/hardware/trackpad-tm035035.md](docs/hardware/trackpad-tm035035.md)）
+- [x] FFC 12P ケーブル + 変換基板でブレッドボードに引き込み（[docs/hardware/trackpad-tm035035.md](docs/hardware/trackpad-tm035035.md)）
 - [x] Pinnacle の SPI ドライバ `crates/hikyaku-pinnacle`（SPI モックで単体テスト済み。実機未確認）
 - [x] 座標 → 相対移動の変換 `crates/hikyaku-pointer`（クリップ・加速・平滑化・タップ・ドラッグ・スクロール。単体テスト済み）
 - [x] S3 ファームへ組み込み（`--features trackpad`、ビルド確認済み。実機未確認）
-- [ ] 実機で疎通確認（ID/バージョン）→ 向き・感度・タップ判定を調整
+- [x] 実機で疎通確認（2026-10-11）: SPI モード 1 / 1MHz、`trackpad: firmware id=0x07 version=0x3a`（参考実装の値と一致）
+- [ ] 向き・感度・タップ判定を実機で調整
 - [ ] スクロール: Pinnacle は**単一指のみ**と理解している（要確認）。2 本指は不可なので、キー押下中スクロール／縁での円スクロールで代替
 
 ## Phase 5: HID の拡充

@@ -25,7 +25,7 @@ tools/scripts/       検証用スクリプト（ble_rx.py, uart_cap.py）
 - **ボンディング保存（`src/bin/bond_store/`）:** `conn.set_bondable(true)` した上で、`PairingComplete` の鍵をフラッシュの 0x9000（`nvs` 領域, 4KB）に保存。最大 4 台、起動時に復元。
   ※ `espflash erase-flash` すると消える（Mac 側でも削除して再ペアリングが必要）。
 - **トラックパッド（`--features trackpad`、既定は無効）:** `src/bin/trackpad/mod.rs`。SPI2（SCK=GPIO12, MISO=GPIO13, MOSI=GPIO11, SS=GPIO10, DR=GPIO9, モード 1, 1MHz）で Pinnacle を読み、
-  `hikyaku-pointer` でマウスレポートにして BLE の ID2 へ流す。`SCROLL_MODE`（AtomicBool）が true の間はスクロールに変換。**実機は未確認（コネクタ待ち）。**
+  `hikyaku-pointer` でマウスレポートにして BLE の ID2 へ流す。`SCROLL_MODE`（AtomicBool）が true の間はスクロールに変換。**疎通は実機で確認済み（2026-10-11）。動きの調整はこれから。**
   起動時のログ `trackpad: firmware id=... version=...` で疎通を確認する（参考実装では 0x07 / 0x3A）。
 - **ログ:** `esp-println` を `uart` feature にして UART0（GPIO43 = ボードの TX ピン）へ。USB シリアルはホスト動作中に使えないため。
 
