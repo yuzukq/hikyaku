@@ -59,7 +59,7 @@ cmd_upload() {
   [ -f "$BIN" ] || { echo "no image. run: $0 build"; exit 1; }
   # BlueZ が古い GATT キャッシュを持っていると新しいサービスが見えないので、先に忘れさせる。
   bluetoothctl remove "$ADDR" >/dev/null 2>&1 || true
-  "$VENV/bin/python" "$ROOT/tools/ota/upload.py" "$BIN" "$(cat "$KEYFILE")"
+  "$VENV/bin/python" -u "$ROOT/tools/ota/upload.py" "$BIN" "$(cat "$KEYFILE")"
 }
 
 case "${1:-all}" in
