@@ -3,6 +3,8 @@ fn main() {
     check_xtensa_linker_available();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+    // OTA の共有鍵が変わったら再ビルドする。
+    println!("cargo:rerun-if-env-changed=HIKYAKU_OTA_KEY");
 }
 
 #[cfg(unix)]

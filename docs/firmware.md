@@ -64,6 +64,8 @@ rustup target add riscv32imc-unknown-none-elf                          # C3 を�
 
 ## 書き込み（S3）
 
+**OTA を使えば、以降は抜き差し・BOOT 操作が要らない → [ota.md](ota.md)。** 以下は有線で書き込む場合（最初の 1 回、または復旧）。
+
 S3 は 3 秒後に USB ホストになり、USB シリアル/JTAG が消える。
 
 1. 5V 給電とキーボードを S3 から外す

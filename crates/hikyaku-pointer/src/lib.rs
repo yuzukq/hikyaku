@@ -49,8 +49,18 @@ pub struct Config {
     pub accel_ref: u32,
     /// 加速の上限（ゲインの倍率の上限, 1/256 単位）。
     pub accel_max_q8: u32,
-    /// 位置の平滑化係数（1/256 単位。256 = 平滑化なし、小さいほど滑らか・遅れる）。
+    /// 位置の平滑化係数の上限（1/256 単位。256 = 平滑化なし、小さいほど滑らか・遅れる）。速く動かしているときに使う。
     pub smoothing_q8: i32,
+    /// 平滑化係数の下限。ゆっくり動かしているときは、この強さで滑らかにする（ノイズ対策）。
+    pub smooth_min_q8: i32,
+    /// この速さ（1 サンプルあたりの移動量、座標単位）以上で、平滑化係数が上限になる。
+    pub smooth_full_speed: i32,
+    /// 触れてから、これだけ動くまではカーソルを動かさない（座標単位。接触時の揺れ・タップでのずれ対策）。
+    pub start_threshold: i32,
+    /// 主軸の動きが副軸の `axis_damp_ratio` 倍以上のとき、副軸の動きを `axis_damp_q8`/256 に抑える
+    /// （横にスワイプしたときに上下がわずかに混ざるのを減らす）。`axis_damp_q8 = 256` で無効。
+    pub axis_damp_ratio: i32,
+    pub axis_damp_q8: i32,
     /// タップと判定する最大接触時間 (ms)。
     pub tap_max_ms: u32,
     /// タップと判定する最大移動量（座標単位）。
@@ -75,12 +85,17 @@ impl Default for Config {
             y_max: 1472,
             invert_x: false,
             invert_y: false,
-            gain_q8: 128,
+            gain_q8: 90,
             accel_ref: 60,
-            accel_max_q8: 256,
-            smoothing_q8: 192,
-            tap_max_ms: 180,
-            tap_max_move: 60,
+            accel_max_q8: 160,
+            smoothing_q8: 256,
+            smooth_min_q8: 80,
+            smooth_full_speed: 24,
+            start_threshold: 10,
+            axis_damp_ratio: 3,
+            axis_damp_q8: 64,
+            tap_max_ms: 250,
+            tap_max_move: 120,
             click_hold_ms: 20,
             drag_window_ms: 250,
             scroll_div: 40,
@@ -116,6 +131,8 @@ struct Touch {
     max_move: i32,
     /// この接触はドラッグ（ボタンを押し続ける）として始まった。
     dragging: bool,
+    /// `start_threshold` を超えて動き出した（それまではカーソルを動かさない）。
+    moving: bool,
     /// スクロールモードで操作した（タップ扱いにしない）。
     scrolled: bool,
 }
@@ -205,6 +222,7 @@ impl Pointer {
                         start_y: y,
                         max_move: 0,
                         dragging,
+                        moving: self.cfg.start_threshold <= 0,
                         scrolled: false,
                     });
                     self.pos = Some((x_q8, y_q8));
@@ -215,15 +233,36 @@ impl Pointer {
                         self.buttons |= MouseReport::BUTTON_LEFT;
                     }
                 } else if let (Some((px, py)), Some(t)) = (self.pos, self.touch.as_mut()) {
-                    // 平滑化した新しい位置。
-                    let a = self.cfg.smoothing_q8.clamp(1, 256);
-                    let nx = px + (x_q8 - px) * a / 256;
-                    let ny = py + (y_q8 - py) * a / 256;
-                    // 移動量（Q8 の差を座標単位に見立てた値）。
-                    let ddx = nx - px;
-                    let ddy = ny - py;
+                    // 平滑化した新しい位置。ゆっくりのときは強く、速いときは弱く平滑化する。
+                    let raw_dx = x_q8 - px;
+                    let raw_dy = y_q8 - py;
+                    let speed = (raw_dx.abs().max(raw_dy.abs()) >> 8).min(i32::MAX / 256);
+                    let amax = self.cfg.smoothing_q8.clamp(1, 256);
+                    let amin = self.cfg.smooth_min_q8.clamp(1, amax);
+                    let full = self.cfg.smooth_full_speed.max(1);
+                    let a = amin + (amax - amin) * speed.min(full) / full;
+                    let nx = px + raw_dx * a / 256;
+                    let ny = py + raw_dy * a / 256;
+                    let mut ddx = nx - px;
+                    let mut ddy = ny - py;
+                    // 主軸がはっきりしているときは副軸を抑える。
+                    let r = self.cfg.axis_damp_ratio.max(1);
+                    if ddx.abs() >= r * ddy.abs() {
+                        ddy = ddy * self.cfg.axis_damp_q8 / 256;
+                    } else if ddy.abs() >= r * ddx.abs() {
+                        ddx = ddx * self.cfg.axis_damp_q8 / 256;
+                    }
                     self.pos = Some((nx, ny));
                     t.max_move = t.max_move.max((x - t.start_x).abs() + (y - t.start_y).abs());
+                    // 動き出しのしきい値を超えるまではカーソルを動かさない（以降は通常どおり）。
+                    if !t.moving {
+                        if t.max_move >= self.cfg.start_threshold {
+                            t.moving = true;
+                        } else {
+                            ddx = 0;
+                            ddy = 0;
+                        }
+                    }
 
                     if scroll_mode {
                         t.scrolled = true;
@@ -291,7 +330,15 @@ mod tests {
 
     /// 加速・平滑化なしの素直な設定（計算を読みやすくする）。
     fn plain() -> Config {
-        Config { gain_q8: 256, accel_ref: 0, smoothing_q8: 256, ..Config::default() }
+        Config {
+            gain_q8: 256,
+            accel_ref: 0,
+            smoothing_q8: 256,
+            smooth_min_q8: 256,
+            start_threshold: 0,
+            axis_damp_q8: 256,
+            ..Config::default()
+        }
     }
 
     fn run(p: &mut Pointer, steps: &[(u32, Option<(u16, u16)>)]) -> std::vec::Vec<MouseReport> {
@@ -357,7 +404,7 @@ mod tests {
 
     #[test]
     fn acceleration_increases_gain_with_speed() {
-        let cfg = Config { gain_q8: 256, accel_ref: 40, smoothing_q8: 256, ..Config::default() };
+        let cfg = Config { accel_ref: 40, accel_max_q8: 3 * 256, ..plain() };
         let mut slow = Pointer::new(cfg);
         let mut fast = Pointer::new(cfg);
         slow.update(0, Some((200, 700)), false);
@@ -371,7 +418,7 @@ mod tests {
 
     #[test]
     fn smoothing_lags_behind_raw_input() {
-        let mut p = Pointer::new(Config { smoothing_q8: 128, ..plain() });
+        let mut p = Pointer::new(Config { smoothing_q8: 128, smooth_min_q8: 128, ..plain() });
         p.update(0, Some((1000, 700)), false);
         let r = p.update(10, Some((1020, 700)), false).unwrap();
         assert_eq!(r.x, 10); // 半分だけ追従
@@ -407,7 +454,7 @@ mod tests {
     #[test]
     fn moved_touch_is_not_a_tap() {
         let mut p = Pointer::new(plain());
-        let reports = run(&mut p, &[(0, Some((1000, 700))), (30, Some((1100, 700))), (60, None), (100, None)]);
+        let reports = run(&mut p, &[(0, Some((1000, 700))), (30, Some((1200, 700))), (60, None), (100, None)]);
         assert!(reports.iter().all(|r| r.buttons == 0), "{reports:?}");
     }
 
@@ -474,6 +521,64 @@ mod tests {
         p.update(400, Some((300, 300)), false); // 長押し（タップにしない）
         p.update(410, None, false);
         assert_eq!(p.update(900, Some((1500, 1000)), false), None);
+    }
+
+    #[test]
+    fn small_jitter_after_touch_does_not_move_the_cursor() {
+        let cfg = Config { start_threshold: 12, ..plain() };
+        let mut p = Pointer::new(cfg);
+        p.update(0, Some((1000, 700)), false);
+        // 揺れ（しきい値未満）
+        for (i, (x, y)) in [(1003, 702), (998, 699), (1004, 701), (1001, 698)].into_iter().enumerate() {
+            assert_eq!(p.update(10 * (i as u32 + 1), Some((x, y)), false), None, "step {i}");
+        }
+        // しきい値を超えて動いたら出力が始まる
+        let r = p.update(60, Some((1030, 700)), false).unwrap();
+        assert!(r.x > 0);
+    }
+
+    #[test]
+    fn horizontal_swipe_suppresses_vertical_wobble() {
+        let cfg = Config { axis_damp_ratio: 3, axis_damp_q8: 64, ..plain() };
+        let mut p = Pointer::new(cfg);
+        p.update(0, Some((1000, 700)), false);
+        // 横に 30、縦に 6 のゆらぎ。副軸は 1/4 に抑えられる。
+        let r = p.update(10, Some((1030, 706)), false).unwrap();
+        assert_eq!(r.x, 30);
+        assert!(r.y.abs() <= 2, "y = {}", r.y);
+    }
+
+    #[test]
+    fn diagonal_motion_is_not_damped() {
+        let cfg = Config { axis_damp_ratio: 3, axis_damp_q8: 64, ..plain() };
+        let mut p = Pointer::new(cfg);
+        p.update(0, Some((1000, 700)), false);
+        let r = p.update(10, Some((1030, 725)), false).unwrap();
+        assert_eq!((r.x, r.y), (30, 25));
+    }
+
+    #[test]
+    fn slow_motion_is_smoothed_more_than_fast_motion() {
+        let cfg = Config { smoothing_q8: 256, smooth_min_q8: 64, smooth_full_speed: 20, ..plain() };
+        let mut slow = Pointer::new(cfg);
+        let mut fast = Pointer::new(cfg);
+        slow.update(0, Some((1000, 700)), false);
+        fast.update(0, Some((1000, 700)), false);
+        let s = slow.update(10, Some((1004, 700)), false).map_or(0, |r| r.x); // 4 → 約 1
+        let f = fast.update(10, Some((1040, 700)), false).unwrap().x; // 20 超 → ほぼそのまま
+        assert!(s <= 2, "slow = {s}");
+        assert!(f >= 38, "fast = {f}");
+    }
+
+    #[test]
+    fn tap_tolerates_small_finger_drift() {
+        // 既定値: 200ms・70 単位ずれまでならタップ
+        let mut p = Pointer::new(Config::default());
+        let reports = run(
+            &mut p,
+            &[(0, Some((1000, 700))), (60, Some((1040, 730))), (200, Some((1045, 735))), (230, None), (260, None), (300, None)],
+        );
+        assert!(reports.iter().any(|r| r.buttons == 1), "{reports:?}");
     }
 
     #[test]

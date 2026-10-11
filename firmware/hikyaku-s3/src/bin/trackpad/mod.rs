@@ -64,6 +64,8 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
             Ok(Some(d)) => {
                 packets += 1;
                 last_raw = (d.x, d.y, d.z);
+                #[cfg(feature = "trackpad-trace")]
+                info!("tp {} {} {} {}", Instant::now().as_millis() as u32, d.x, d.y, d.z);
                 if d.touching() {
                     touch_packets += 1;
                 }

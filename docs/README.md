@@ -8,6 +8,7 @@
 | [hardware/usb-serial-ch9102f.md](hardware/usb-serial-ch9102f.md) | USB-シリアル変換（ログ用）の使い方 |
 | [hardware/trackpad-tm035035.md](hardware/trackpad-tm035035.md) | トラックパッド TM035035 の仕様メモ |
 | [keyboard-7skb.md](keyboard-7skb.md) | 対象キーボード 7skb の USB/HID 構成 |
+| [ota.md](ota.md) | OTA（BLE 経由のファーム更新）の使い方と仕組み |
 | [firmware.md](firmware.md) | ファームウェアの構成・ビルド・書き込み・デバッグ・落とし穴 |
 | [design/multi-host.md](design/multi-host.md) | 2 台のマシンの切り替え（検討中の設計メモ） |
 | [reference/datasheets.md](reference/datasheets.md) | データシート等へのリンクと保管場所 |

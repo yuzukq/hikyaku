@@ -1590,6 +1590,7 @@ dependencies = [
  "hikyaku-pointer",
  "log",
  "postcard",
+ "sha2",
  "static_cell",
  "trouble-host",
 ]

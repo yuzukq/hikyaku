@@ -12,7 +12,8 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{Duration, Timer};
+use embassy_sync::signal::Signal;
+use embassy_time::{with_timeout, Duration, Timer};
 use bond_store::BondStore;
 use core::cell::RefCell;
 use esp_hal::clock::CpuClock;
@@ -20,7 +21,7 @@ use esp_storage::FlashStorage;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::usb::otg::{embassy_usb_host::Driver as HostDriver, Usb};
 
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_usb_driver::host::{pipe, DeviceEvent, UsbHostAllocator, UsbPipe};
 use embassy_usb_driver::{EndpointInfo, EndpointType};
 use embassy_usb_host::{
@@ -39,6 +40,7 @@ use esp_backtrace as _;
 extern crate alloc;
 
 mod bond_store;
+mod ota;
 #[cfg(feature = "trackpad")]
 mod trackpad;
 
@@ -82,6 +84,16 @@ enum Report {
 }
 
 static REPORTS: Channel<CriticalSectionRawMutex, Report, 32> = Channel::new();
+
+/// キーボードの組み合わせ（Ctrl+Alt+Shift+Gui+Enter+U）で OTA モードに入る要求。
+static OTA_REQUEST: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// 修飾キーに Ctrl・Shift・Alt・Gui（左右どちらでも）がそろい、Enter(0x28) と U(0x18) が押されている。
+fn is_ota_chord(modifiers: u8, keys: &[Option<core::num::NonZeroU8>; 6]) -> bool {
+    let hyper = modifiers & 0x11 != 0 && modifiers & 0x22 != 0 && modifiers & 0x44 != 0 && modifiers & 0x88 != 0;
+    let has = |code: u8| keys.iter().any(|k| k.is_some_and(|k| k.get() == code));
+    hyper && has(0x28) && has(0x18)
+}
 
 
 /// キーボードの「マウス + コンシューマ（音量など）」インターフェースを探して、
@@ -205,6 +217,12 @@ async fn usb_host(usb: Usb<'static>) {
                     break;
                 }
                 Either::First(Either::First(Ok(HandlerEvent::HandlerEvent(KbdEvent::KeyStatusUpdate(u))))) => {
+                    if is_ota_chord(u.modifiers, &u.keypress) {
+                        info!("usb: OTA chord");
+                        OTA_REQUEST.signal(());
+                        let _ = REPORTS.try_send(Report::Key([0; 8])); // 押しっぱなしを残さない。転送はしない
+                        continue;
+                    }
                     let mut r = [0u8; 8];
                     r[0] = u.modifiers;
                     for (dst, k) in r[2..].iter_mut().zip(u.keypress.iter()) {
@@ -235,6 +253,8 @@ async fn usb_host(usb: Usb<'static>) {
 struct Server {
     hid: HidService,
     battery: BatteryService,
+    /// OTA（常に存在するが、OTA モード以外では書き込みを拒否する）。末尾に置いて、既存サービスのハンドルを動かさない。
+    ota: OtaService,
 }
 
 #[gatt_service(uuid = service::HUMAN_INTERFACE_DEVICE)]
@@ -259,6 +279,14 @@ struct HidService {
     #[descriptor(uuid = "2908", read, value = [0x03, 0x01])]
     #[characteristic(uuid = "2a4d", read, notify, value = [0; 2])]
     consumer_in: [u8; 2],
+}
+
+#[gatt_service(uuid = "6b9a0001-6f1e-4b8e-9d57-7f0d0a5b0001")]
+struct OtaService {
+    #[characteristic(uuid = "6b9a0002-6f1e-4b8e-9d57-7f0d0a5b0001", write, notify, value = [0; 80])]
+    ctrl: [u8; 80],
+    #[characteristic(uuid = "6b9a0003-6f1e-4b8e-9d57-7f0d0a5b0001", write_without_response, value = [0; 244])]
+    data: [u8; 244],
 }
 
 #[gatt_service(uuid = service::BATTERY)]
@@ -313,7 +341,9 @@ async fn main(spawner: Spawner) -> ! {
         .set_io_capabilities(IoCapabilities::NoInputNoOutput)
         .build();
     // 保存済みのペア情報を復元する（Mac 側で削除しない限り、再起動後も再ペアリング不要）。
-    let store = RefCell::new(BondStore::load(FlashStorage::new(peripherals.FLASH)));
+    let flash = RefCell::new(FlashStorage::new(peripherals.FLASH));
+    ota::mark_app_valid(&flash);
+    let store = RefCell::new(BondStore::load(&flash));
     for bond in store.borrow().bonds() {
         if let Err(e) = stack.add_bond_information(bond.clone()) {
             warn!("restore bond failed: {:?}", e);
@@ -341,20 +371,24 @@ async fn main(spawner: Spawner) -> ! {
 
     let app = async {
         loop {
-            match advertise(&mut peripheral, &server).await {
-                Ok(conn) => {
-                    info!("connected");
-                    // ボンディングを許可（これが無いと PairingComplete の bond が None になり保存されない）。
-                    let _ = conn.raw().set_bondable(true);
-                    let _ = conn.raw().request_security();
-                    session(&server, &conn, &store).await;
-                    info!("disconnected");
-                }
-                Err(e) => {
+            let conn = match select(advertise(&mut peripheral, &server, NAME), OTA_REQUEST.wait()).await {
+                Either::First(Ok(conn)) => conn,
+                Either::First(Err(e)) => {
                     warn!("advertise error: {:?}", e);
                     Timer::after(Duration::from_secs(1)).await;
+                    continue;
                 }
+                Either::Second(()) => ota_mode(&mut peripheral, &server, &flash).await,
+            };
+            info!("connected");
+            // ボンディングを許可（これが無いと PairingComplete の bond が None になり保存されない）。
+            let _ = conn.raw().set_bondable(true);
+            let _ = conn.raw().request_security();
+            if let SessionEnd::Ota = session(&server, &conn, &store).await {
+                drop(conn);
+                ota_mode(&mut peripheral, &server, &flash).await;
             }
+            info!("disconnected");
         }
     };
     let _ = join(runner.run(), app).await;
@@ -366,13 +400,14 @@ async fn main(spawner: Spawner) -> ! {
 async fn advertise<'v, 's, C: Controller>(
     peripheral: &mut Peripheral<'v, C, DefaultPacketPool>,
     server: &'s Server<'v>,
+    name: &str,
 ) -> Result<GattConnection<'v, 's, DefaultPacketPool>, BleHostError<C::Error>> {
     let mut adv = [0u8; 31];
     let len = AdStructure::encode_slice(
         &[
             AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
             AdStructure::CompleteServiceUuids16(&[[0x12, 0x18]]),
-            AdStructure::CompleteLocalName(NAME.as_bytes()),
+            AdStructure::CompleteLocalName(name.as_bytes()),
         ],
         &mut adv[..],
     )?;
@@ -382,7 +417,7 @@ async fn advertise<'v, 's, C: Controller>(
             Advertisement::ConnectableScannableUndirected { adv_data: &adv[..len], scan_data: &[] },
         )
         .await?;
-    info!("advertising as {}", NAME);
+    info!("advertising as {}", name);
     let conn = advertiser.accept().await?.with_attribute_server(server)?;
     Ok(conn)
 }
@@ -391,8 +426,8 @@ async fn advertise<'v, 's, C: Controller>(
 async fn session<P: PacketPool>(
     server: &Server<'_>,
     conn: &GattConnection<'_, '_, P>,
-    store: &RefCell<BondStore<'_>>,
-) {
+    store: &RefCell<BondStore<'_, '_>>,
+) -> SessionEnd {
     let events = async {
         loop {
             match conn.next().await {
@@ -408,6 +443,17 @@ async fn session<P: PacketPool>(
                 }
                 GattConnectionEvent::PairingFailed(e) => warn!("pairing failed: {:?}", e),
                 GattConnectionEvent::Gatt { event } => {
+                    // OTA の書き込みは OTA モード以外では受け付けない。
+                    let is_ota = matches!(&event, GattEvent::Write(w)
+                        if w.handle() == server.ota.ctrl.handle || w.handle() == server.ota.data.handle);
+                    if is_ota {
+                        warn!("ota: write rejected (not in OTA mode)");
+                        match event.reject(AttErrorCode::WRITE_NOT_PERMITTED) {
+                            Ok(reply) => reply.send().await,
+                            Err(e) => warn!("gatt error: {:?}", e),
+                        }
+                        continue;
+                    }
                     match &event {
                         GattEvent::Write(w) => w.with_data(|_, d| debug!("gatt write handle={} data={:?}", w.handle(), d)),
                         GattEvent::Read(r) => debug!("gatt read handle={}", r.handle()),
@@ -451,5 +497,99 @@ async fn session<P: PacketPool>(
             }
         }
     };
-    embassy_futures::select::select(events, forward).await;
+    match select3(events, forward, OTA_REQUEST.wait()).await {
+        Either3::Third(()) => SessionEnd::Ota,
+        _ => SessionEnd::Disconnected,
+    }
+}
+
+enum SessionEnd {
+    Disconnected,
+    /// キーボードから OTA モードが要求された。
+    Ota,
+}
+
+enum Action {
+    None,
+    Notify([u8; ota::CTRL_LEN]),
+    /// 通知を送ってから再起動する。
+    Reboot([u8; ota::CTRL_LEN]),
+}
+
+/// OTA モード。ホストとの接続は切り、`hikyaku-OTA` として PC からの接続を待つ。終わったら（または時間切れで）再起動する。
+async fn ota_mode<'v, C: Controller>(
+    peripheral: &mut Peripheral<'v, C, DefaultPacketPool>,
+    server: &Server<'v>,
+    flash: &RefCell<FlashStorage<'_>>,
+) -> ! {
+    match ota::key() {
+        None => warn!("ota: HIKYAKU_OTA_KEY was not set at build time; OTA is disabled"),
+        Some(key) => {
+            info!("ota: mode on for 180 s (advertising as hikyaku-OTA)");
+            let mut ota = ota::Ota::new(flash, key);
+            let r = with_timeout(Duration::from_secs(180), ota_session(peripheral, server, &mut ota)).await;
+            info!("ota: {}", if r.is_ok() { "finished" } else { "timed out" });
+        }
+    }
+    Timer::after(Duration::from_millis(300)).await;
+    esp_hal::system::software_reset()
+}
+
+async fn ota_session<'v, C: Controller>(
+    peripheral: &mut Peripheral<'v, C, DefaultPacketPool>,
+    server: &Server<'v>,
+    ota: &mut ota::Ota<'_, '_>,
+) {
+    let (ctrl_h, data_h) = (server.ota.ctrl.handle, server.ota.data.handle);
+    loop {
+        let conn = match advertise(peripheral, server, "hikyaku-OTA").await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("ota: advertise error: {:?}", e);
+                Timer::after(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+        info!("ota: connected");
+        loop {
+            match conn.next().await {
+                GattConnectionEvent::Disconnected { .. } => break,
+                GattConnectionEvent::Gatt { event } => {
+                    let action = match &event {
+                        GattEvent::Write(w) if w.handle() == ctrl_h => w.with_data(|_, d| match ota.ctrl(d) {
+                            ota::Reply::None => Action::None,
+                            ota::Reply::Notify(n) => Action::Notify(n),
+                            ota::Reply::NotifyThenReboot(n) => Action::Reboot(n),
+                        }),
+                        GattEvent::Write(w) if w.handle() == data_h => w.with_data(|_, d| match ota.data(d) {
+                            Ok(Some(off)) => Action::Notify(ota::Ota::progress_note(off)),
+                            Ok(None) => Action::None,
+                            Err(st) => {
+                                warn!("ota: data error: {:?}", st);
+                                Action::Notify(ota::Ota::error_note(st))
+                            }
+                        }),
+                        _ => Action::None,
+                    };
+                    match event.accept() {
+                        Ok(reply) => reply.send().await,
+                        Err(e) => warn!("gatt error: {:?}", e),
+                    }
+                    match action {
+                        Action::None => {}
+                        Action::Notify(n) => {
+                            let _ = server.ota.ctrl.notify(&conn, &n, false).await;
+                        }
+                        Action::Reboot(n) => {
+                            let _ = server.ota.ctrl.notify(&conn, &n, false).await;
+                            Timer::after(Duration::from_millis(500)).await;
+                            return;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        info!("ota: disconnected, waiting again");
+    }
 }

@@ -7,6 +7,7 @@
 //! レイアウト: "HKB1" | count:u8 | (len:u16le | postcard(BondInformation)) × count
 
 use alloc::vec::Vec;
+use core::cell::RefCell;
 use esp_storage::FlashStorage;
 use log::{info, warn};
 use trouble_host::prelude::BondInformation;
@@ -17,17 +18,18 @@ const MAGIC: [u8; 4] = *b"HKB1";
 /// 保持するペア相手の上限。超えたら古いものから捨てる。
 const MAX_BONDS: usize = 4;
 
-pub struct BondStore<'d> {
-    flash: FlashStorage<'d>,
+pub struct BondStore<'a, 'd> {
+    /// OTA とフラッシュを共有する。
+    flash: &'a RefCell<FlashStorage<'d>>,
     bonds: Vec<BondInformation>,
 }
 
-impl<'d> BondStore<'d> {
+impl<'a, 'd> BondStore<'a, 'd> {
     /// フラッシュから読み出す。壊れている・空の場合は空のストアを返す。
-    pub fn load(mut flash: FlashStorage<'d>) -> Self {
+    pub fn load(flash: &'a RefCell<FlashStorage<'d>>) -> Self {
         let mut buf = [0u8; SECTOR];
         let mut bonds = Vec::new();
-        if flash.read(OFFSET, &mut buf).is_ok() && buf[..4] == MAGIC {
+        if flash.borrow_mut().read(OFFSET, &mut buf).is_ok() && buf[..4] == MAGIC {
             let count = buf[4] as usize;
             let mut pos = 5;
             for _ in 0..count.min(MAX_BONDS) {
@@ -82,10 +84,10 @@ impl<'d> BondStore<'d> {
             buf[pos..pos + enc.len()].copy_from_slice(enc);
             pos += enc.len();
         }
-        let res = self
-            .flash
+        let mut flash = self.flash.borrow_mut();
+        let res = flash
             .erase(OFFSET, OFFSET + SECTOR as u32)
-            .and_then(|_| self.flash.write(OFFSET, &buf));
+            .and_then(|_| flash.write(OFFSET, &buf));
         match res {
             Ok(()) => info!("bond_store: saved {} bond(s)", self.bonds.len()),
             Err(_) => warn!("bond_store: flash write failed"),
