@@ -30,7 +30,7 @@ async def main() -> int:
     ap.add_argument("image")
     ap.add_argument("key")
     ap.add_argument("--name", default="hikyaku-OTA")
-    ap.add_argument("--timeout", type=float, default=150)
+    ap.add_argument("--timeout", type=float, default=600)
     a = ap.parse_args()
 
     image = open(a.image, "rb").read()
