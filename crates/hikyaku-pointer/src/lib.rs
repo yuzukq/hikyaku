@@ -55,6 +55,8 @@ pub struct Config {
     pub smooth_min_q8: i32,
     /// この速さ（1 サンプルあたりの移動量、座標単位）以上で、平滑化係数が上限になる。
     pub smooth_full_speed: i32,
+    /// 生の座標に 3 点の中央値フィルタを掛ける（1 サンプルだけ飛ぶ「とげ」を除く。1 サンプルぶん遅れる）。
+    pub median3: bool,
     /// 触れてから、これだけ動くまではカーソルを動かさない（座標単位。接触時の揺れ・タップでのずれ対策）。
     pub start_threshold: i32,
     /// 主軸の動きが副軸の `axis_damp_ratio` 倍以上のとき、副軸の動きを `axis_damp_q8`/256 に抑える
@@ -91,6 +93,7 @@ impl Default for Config {
             smoothing_q8: 256,
             smooth_min_q8: 80,
             smooth_full_speed: 24,
+            median3: true,
             start_threshold: 10,
             axis_damp_ratio: 3,
             axis_damp_q8: 64,
@@ -131,6 +134,9 @@ struct Touch {
     max_move: i32,
     /// この接触はドラッグ（ボタンを押し続ける）として始まった。
     dragging: bool,
+    /// 直近 2 サンプルの生座標（中央値フィルタ用）と、この接触で受けたサンプル数。
+    hist: [(i32, i32); 2],
+    count: u32,
     /// `start_threshold` を超えて動き出した（それまではカーソルを動かさない）。
     moving: bool,
     /// スクロールモードで操作した（タップ扱いにしない）。
@@ -208,7 +214,18 @@ impl Pointer {
 
         match touch {
             Some((rx, ry)) => {
-                let (x, y) = self.clip(rx, ry);
+                let (mut x, mut y) = self.clip(rx, ry);
+                // 3 点の中央値フィルタ（接触の最初の 2 サンプルは素通し）。
+                if let Some(t) = self.touch.as_mut() {
+                    let (rx0, ry0) = (x, y);
+                    if self.cfg.median3 && t.count >= 2 {
+                        let med = |a: i32, b: i32, c: i32| a.max(b).min(a.min(b).max(c));
+                        x = med(t.hist[0].0, t.hist[1].0, rx0);
+                        y = med(t.hist[0].1, t.hist[1].1, ry0);
+                    }
+                    t.hist = [t.hist[1], (rx0, ry0)];
+                    t.count += 1;
+                }
                 let (x_q8, y_q8) = (x << 8, y << 8);
 
                 if self.touch.is_none() {
@@ -221,6 +238,8 @@ impl Pointer {
                         start_x: x,
                         start_y: y,
                         max_move: 0,
+                        hist: [(0, 0); 2],
+                        count: 0,
                         dragging,
                         moving: self.cfg.start_threshold <= 0,
                         scrolled: false,
@@ -335,6 +354,7 @@ mod tests {
             accel_ref: 0,
             smoothing_q8: 256,
             smooth_min_q8: 256,
+            median3: false,
             start_threshold: 0,
             axis_damp_q8: 256,
             ..Config::default()
@@ -579,6 +599,35 @@ mod tests {
             &[(0, Some((1000, 700))), (60, Some((1040, 730))), (200, Some((1045, 735))), (230, None), (260, None), (300, None)],
         );
         assert!(reports.iter().any(|r| r.buttons == 1), "{reports:?}");
+    }
+
+    #[test]
+    fn median_filter_removes_a_single_sample_spike() {
+        let cfg = Config { median3: true, ..plain() };
+        let mut p = Pointer::new(cfg);
+        // 30 ずつ進む動きの途中で、1 サンプルだけ +128 のとげ。
+        let xs = [1000u16, 1030, 1060, 1090 + 128, 1120, 1150, 1180];
+        let mut sum = 0i32;
+        for (i, x) in xs.iter().enumerate() {
+            if let Some(r) = p.update(10 * i as u32, Some((*x, 700)), false) {
+                assert!(r.x as i32 <= 70, "no jump: step {i} gave {}", r.x);
+                sum += r.x as i32;
+            }
+        }
+        assert!(sum > 100, "still tracks the motion, sum {sum}");
+    }
+
+    #[test]
+    fn median_filter_passes_straight_motion_unchanged() {
+        let cfg = Config { median3: true, ..plain() };
+        let mut p = Pointer::new(cfg);
+        let mut outs = std::vec::Vec::new();
+        for i in 0..8u32 {
+            if let Some(r) = p.update(10 * i, Some((1000 + 20 * i as u16, 700)), false) {
+                outs.push(r.x);
+            }
+        }
+        assert!(outs.iter().all(|&x| x == 20), "{outs:?}");
     }
 
     #[test]

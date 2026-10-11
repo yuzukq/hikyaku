@@ -30,6 +30,7 @@ fn main() {
             "damp" => cfg.axis_damp_q8 = n as i32,
             "tap_ms" => cfg.tap_max_ms = n as u32,
             "tap_move" => cfg.tap_max_move = n as i32,
+            "median" => cfg.median3 = n != 0,
             "invert_y" => cfg.invert_y = n != 0,
             "invert_x" => cfg.invert_x = n != 0,
             _ => panic!("unknown key {k}"),

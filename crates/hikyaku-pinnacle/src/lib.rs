@@ -97,6 +97,8 @@ pub fn parse_absolute(d: &[u8; 6]) -> AbsoluteData {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Checked {
     pub data: AbsoluteData,
+    /// 読んだ生のパケット（レジスタ 0x12〜0x17）。診断用。
+    pub raw: [u8; 6],
     /// 2 回読んだ結果が食い違った（3 回目で多数決した）。SPI 読み取りの誤りの目安。
     pub disagreed: bool,
 }
@@ -119,6 +121,11 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
 
     pub fn release(self) -> SPI {
         self.spi
+    }
+
+    /// SPI の設定（周波数など）を変えるために、下のデバイスを借りる。
+    pub fn spi_mut(&mut self) -> &mut SPI {
+        &mut self.spi
     }
 
     pub fn write_reg(&mut self, addr: u8, value: u8) -> Result<(), Error<SPI::Error>> {
@@ -218,7 +225,7 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
             (m, true)
         };
         self.clear_flags()?;
-        Ok(Some(Checked { data: parse_absolute(&packet), disagreed }))
+        Ok(Some(Checked { data: parse_absolute(&packet), raw: packet, disagreed }))
     }
 }
 

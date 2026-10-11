@@ -9,7 +9,11 @@ use embassy_time::{Duration, Instant, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
     gpio::{Input, Output},
-    spi::master::Spi,
+    spi::{
+        master::{Config as SpiConfig, Spi},
+        Mode,
+    },
+    time::Rate,
     Blocking,
 };
 use hikyaku_pinnacle::Pinnacle;
@@ -17,6 +21,12 @@ use hikyaku_pointer::{Config, Pointer};
 use log::{info, warn};
 
 use crate::{Report, REPORTS};
+
+/// 調査用（`trackpad-trace`）: SPI の周波数を一定時間ごとに切り替えて、MSB が正しく読めているかを周波数ごとに調べる。
+#[cfg(feature = "trackpad-trace")]
+const SWEEP_KHZ: [u32; 6] = [4000, 2000, 1000, 500, 250, 8000];
+#[cfg(feature = "trackpad-trace")]
+const SWEEP_SECS: u64 = 8;
 
 /// true の間、トラックパッドの動きをスクロールに変換する（キー押下中など。今は常に false）。
 pub static SCROLL_MODE: AtomicBool = AtomicBool::new(false);
@@ -51,11 +61,30 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
     let mut reports = 0u32;
     let mut read_errors = 0u32;
     let mut disagreed = 0u32;
+    // 下位バイトの bit7（128 の位）が立っていたサンプル数。正しく読めていれば、触っている間はおよそ半分のサンプルで立つ。
+    let mut msb_x = 0u32;
+    let mut msb_y = 0u32;
+    let mut khz = 0u32;
+    #[cfg(feature = "trackpad-trace")]
+    let mut sweep_idx = 0usize;
+    #[cfg(feature = "trackpad-trace")]
+    let mut last_switch = Instant::now() - Duration::from_secs(SWEEP_SECS);
     let mut last_log = Instant::now();
     let mut last_raw = (0u16, 0u16, 0u8);
     let mut was_touching = false;
 
     loop {
+        #[cfg(feature = "trackpad-trace")]
+        if last_switch.elapsed() >= Duration::from_secs(SWEEP_SECS) {
+            khz = SWEEP_KHZ[sweep_idx % SWEEP_KHZ.len()];
+            sweep_idx += 1;
+            last_switch = Instant::now();
+            let cfg = SpiConfig::default().with_frequency(Rate::from_khz(khz)).with_mode(Mode::_1);
+            if pad.spi_mut().bus_mut().apply_config(&cfg).is_err() {
+                warn!("trackpad: could not set SPI to {} kHz", khz);
+            }
+            info!("trackpad: SPI now {} kHz", khz);
+        }
         // DR ピンに頼らず Status1 を毎回見る（DR の配線が不安定でも読めるように）。
         polls += 1;
         if dr.is_high() {
@@ -67,10 +96,19 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
                 if c.disagreed {
                     disagreed += 1;
                 }
+                if c.data.touching() {
+                    // 生パケットの X 下位バイト(2)・Y 下位バイト(3)
+                    if c.raw[2] & 0x80 != 0 {
+                        msb_x += 1;
+                    }
+                    if c.raw[3] & 0x80 != 0 {
+                        msb_y += 1;
+                    }
+                }
                 packets += 1;
                 last_raw = (d.x, d.y, d.z);
                 #[cfg(feature = "trackpad-trace")]
-                info!("tp {} {} {} {}", Instant::now().as_millis() as u32, d.x, d.y, d.z);
+                info!("tp {} {} {} {} khz={} raw={:02x?}", Instant::now().as_millis() as u32, d.x, d.y, d.z, khz, c.raw);
                 if d.touching() {
                     touch_packets += 1;
                 }
@@ -94,8 +132,8 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
             if packets > 0 || reports > 0 || dr_high > 0 || read_errors > 0 {
                 let status1 = pad.read_reg(hikyaku_pinnacle::reg::STATUS1).ok();
                 info!(
-                    "trackpad: polls={} packets={} touching={} dr_high={} reports={} errors={} disagreed={} status1={:?} last(x,y,z)={:?}",
-                    polls, packets, touch_packets, dr_high, reports, read_errors, disagreed, status1, last_raw
+                    "trackpad: khz={} polls={} packets={} touching={} msb_x={} msb_y={} reports={} errors={} disagreed={} status1={:?} last(x,y,z)={:?}",
+                    khz, polls, packets, touch_packets, msb_x, msb_y, reports, read_errors, disagreed, status1, last_raw
                 );
             }
             polls = 0;
@@ -105,6 +143,8 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
             reports = 0;
             read_errors = 0;
             disagreed = 0;
+            msb_x = 0;
+            msb_y = 0;
             last_log = Instant::now();
         }
         // Pinnacle のサンプルレートは約 100Hz。それに合わせる。
