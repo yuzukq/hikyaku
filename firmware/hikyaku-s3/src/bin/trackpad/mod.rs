@@ -99,6 +99,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
             read_errors = 0;
             last_log = Instant::now();
         }
-        Timer::after(Duration::from_millis(5)).await;
+        // Pinnacle のサンプルレートは約 100Hz。それに合わせる。
+        Timer::after(Duration::from_millis(10)).await;
     }
 }

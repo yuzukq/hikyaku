@@ -80,11 +80,15 @@ impl AbsoluteData {
 }
 
 /// 絶対座標パケット（レジスタ 0x12〜0x17）を解釈する。
+///
+/// X・Y とも 11 ビット（0〜2047）にマスクする。実機で、パケット 4 バイト目の bit7（Y の最上位に見えるビット）が
+/// 座標ではない別のフラグとして立ったり立たなかったりすることを確認した（離したときは `x=0, y=2048` になる）。
+/// マスクしないと Y が 2048 だけ跳ぶ。仕様上の範囲は X 0〜2048、Y 0〜1536 で、11 ビットに収まる。
 pub fn parse_absolute(d: &[u8; 6]) -> AbsoluteData {
     AbsoluteData {
         buttons: d[0] & 0x3F,
-        x: d[2] as u16 | ((d[4] as u16 & 0x0F) << 8),
-        y: d[3] as u16 | ((d[4] as u16 & 0xF0) << 4),
+        x: (d[2] as u16 | ((d[4] as u16 & 0x0F) << 8)) & 0x7FF,
+        y: (d[3] as u16 | ((d[4] as u16 & 0xF0) << 4)) & 0x7FF,
         z: d[5] & 0x3F,
     }
 }
@@ -246,9 +250,21 @@ mod tests {
         assert_eq!(a.buttons, 0x3F);
         assert_eq!(a.z, 0x3F);
         let a = parse_absolute(&[0, 0, 0xFF, 0xFF, 0xFF, 0]);
-        assert_eq!(a.x, 0xFFF);
-        assert_eq!(a.y, 0xFFF);
+        assert_eq!(a.x, 0x7FF);
+        assert_eq!(a.y, 0x7FF);
         assert!(!a.touching());
+    }
+
+    #[test]
+    fn y_bit11_is_ignored() {
+        // 実機のログ: 離したときの (x=0, y=2048, z=0) は、パケット 4 バイト目の bit7 が立っただけ。
+        let a = parse_absolute(&[0, 0, 0, 0, 0x80, 0]);
+        assert_eq!((a.x, a.y, a.z), (0, 0, 0));
+        // 触っている最中に bit7 が立っても立たなくても、同じ Y になる。
+        let on = parse_absolute(&[0, 0, 0x00, 0x52, 0xA2, 0x0D]);
+        let off = parse_absolute(&[0, 0, 0x00, 0x52, 0x22, 0x0D]);
+        assert_eq!(on.y, off.y);
+        assert_eq!(on.y, 0x252);
     }
 
     #[test]
