@@ -6,7 +6,7 @@
 
 | 部品 | 型番 | 状況 | 用途 |
 |---|---|---|---|
-| マイコン | Seeed XIAO **ESP32-S3** | ✅ 手元（採用） | USB ホスト（キーボードを読む）+ BLE HID |
+| マイコン | **ESP32-S3 ボード**（XIAO ではない。GPIO 番号印字。Super Mini 系、型名要確認） | ✅ 手元（採用） | USB ホスト（キーボードを読む）+ BLE HID |
 | トラックパッド | Cirque **TM035035-2024**（SPI 版, Pinnacle） | ✅ 手元 | ポインティング。FFC コネクタ未調達 |
 | キーボード | Salicylic_Acid 7skb（7sPro） | ✅ 手元 | 入力元（USB Type-C） |
 | USB-C ⇔ USB-C ケーブル | — | ✅ | S3 とキーボードの接続（CC の問題なく動作確認済み） |

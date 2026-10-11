@@ -4,8 +4,8 @@
 
 ```
 firmware/
-  hikyaku-s3/        ★本命。XIAO ESP32-S3: USB ホスト（キーボード）→ BLE HID
-  hikyaku-c3/        初期検証用。XIAO ESP32-C3: PC から USB シリアルで受けた HID レポートを BLE へ
+  hikyaku-s3/        ★本命。ESP32-S3 ボード: USB ホスト（キーボード）→ BLE HID
+  hikyaku-c3/        初期検証用。XIAO ESP32-C3（こちらは XIAO）: PC から USB シリアルで受けた HID レポートを BLE へ
   uart-bridge-c3/    C3 を UART→USB 変換器にする（CH9102F があれば不要）
 crates/hikyaku-hid/      no_std。ブートキーボードレポートの解釈・Usage 名（ホストでテスト可）
 crates/hikyaku-pinnacle/ no_std。Cirque Pinnacle の SPI ドライバ（RAP, embedded-hal 1.0。SPI モックで単体テスト）
@@ -24,10 +24,10 @@ tools/scripts/       検証用スクリプト（ble_rx.py, uart_cap.py）
   アドレスは固定のランダム静的アドレス `FF:E4:05:1A:8F:FF`。名前は `hikyaku`。IO 能力は NoInputNoOutput（JustWorks）。
 - **ボンディング保存（`src/bin/bond_store/`）:** `conn.set_bondable(true)` した上で、`PairingComplete` の鍵をフラッシュの 0x9000（`nvs` 領域, 4KB）に保存。最大 4 台、起動時に復元。
   ※ `espflash erase-flash` すると消える（Mac 側でも削除して再ペアリングが必要）。
-- **トラックパッド（`--features trackpad`、既定は無効）:** `src/bin/trackpad/mod.rs`。SPI2（SCK=GPIO7, MISO=GPIO8, MOSI=GPIO9, SS=GPIO2, DR=GPIO1, モード 1, 1MHz）で Pinnacle を読み、
+- **トラックパッド（`--features trackpad`、既定は無効）:** `src/bin/trackpad/mod.rs`。SPI2（SCK=GPIO12, MISO=GPIO13, MOSI=GPIO11, SS=GPIO10, DR=GPIO9, モード 1, 1MHz）で Pinnacle を読み、
   `hikyaku-pointer` でマウスレポートにして BLE の ID2 へ流す。`SCROLL_MODE`（AtomicBool）が true の間はスクロールに変換。**実機は未確認（コネクタ待ち）。**
   起動時のログ `trackpad: firmware id=... version=...` で疎通を確認する（参考実装では 0x07 / 0x3A）。
-- **ログ:** `esp-println` を `uart` feature にして UART0（D6 = GPIO43）へ。USB シリアルはホスト動作中に使えないため。
+- **ログ:** `esp-println` を `uart` feature にして UART0（GPIO43 = ボードの TX ピン）へ。USB シリアルはホスト動作中に使えないため。
 
 ## ビルド
 
@@ -73,7 +73,7 @@ S3 は 3 秒後に USB ホストになり、USB シリアル/JTAG が消える�
 
 ## ログを見る
 
-CH9102F（または UART→USB 変換器）を S3 の D6 につなぎ、`tools/scripts/uart_cap.py 60 /dev/ttyACM0`。
+CH9102F（または UART→USB 変換器）を S3 の TX（GPIO43）につなぎ、`tools/scripts/uart_cap.py 60 /dev/ttyACM0`。
 期待するログ: `usb: waiting for device` → `usb: device 04d8:eb5f` → `usb: keyboard ready` → `usb: media interface 2`、接続時は `connected` / `pairing complete: ... bonded=true` / `bond_store: saved ...`。
 
 ## PC を BLE の受信側にして検証する

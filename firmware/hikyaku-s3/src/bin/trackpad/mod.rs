@@ -1,6 +1,6 @@
 //! トラックパッド（Cirque Pinnacle, SPI）→ マウスレポート。`--features trackpad` のときだけ有効。
 //!
-//! 配線（docs/hardware/wiring.md）: SCK=D8(GPIO7) / MISO=D9(GPIO8) / MOSI=D10(GPIO9) / SS=D1(GPIO2) / DR=D0(GPIO1)。
+//! 配線（docs/hardware/wiring.md）: SCK=GPIO12 / MISO=GPIO13 / MOSI=GPIO11 / SS=GPIO10 / DR=GPIO9（SPI2 の標準ピン + DR）。
 //! SPI モード 1、1MHz。実機は未確認（コネクタ待ち）。
 
 use core::sync::atomic::{AtomicBool, Ordering};

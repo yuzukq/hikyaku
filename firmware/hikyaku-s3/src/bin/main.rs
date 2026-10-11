@@ -291,11 +291,11 @@ async fn main(spawner: Spawner) -> ! {
             SpiConfig::default().with_frequency(Rate::from_mhz(1)).with_mode(Mode::_1),
         )
         .unwrap()
-        .with_sck(peripherals.GPIO7)
-        .with_mosi(peripherals.GPIO9)
-        .with_miso(peripherals.GPIO8);
-        let cs = Output::new(peripherals.GPIO2, Level::High, OutputConfig::default());
-        let dr = Input::new(peripherals.GPIO1, InputConfig::default().with_pull(Pull::Down));
+        .with_sck(peripherals.GPIO12)
+        .with_mosi(peripherals.GPIO11)
+        .with_miso(peripherals.GPIO13);
+        let cs = Output::new(peripherals.GPIO10, Level::High, OutputConfig::default());
+        let dr = Input::new(peripherals.GPIO9, InputConfig::default().with_pull(Pull::Down));
         spawner.spawn(trackpad::run(spi, cs, dr).unwrap());
     }
 
