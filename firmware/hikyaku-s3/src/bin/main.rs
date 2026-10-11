@@ -249,7 +249,9 @@ async fn usb_host(usb: Usb<'static>) {
     }
 }
 
-#[gatt_server]
+/// `connections_max` は、購読（CCCD）の状態を覚えておく相手の数。既定の 1 だと、Mac が使った枠のせいで、
+/// 別の相手（OTA 用の PC や 2 台目のホスト）が通知を購読できなくなる。
+#[gatt_server(connections_max = 4)]
 struct Server {
     hid: HidService,
     battery: BatteryService,
