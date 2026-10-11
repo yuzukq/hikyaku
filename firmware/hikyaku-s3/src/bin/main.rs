@@ -88,6 +88,27 @@ static REPORTS: Channel<CriticalSectionRawMutex, Report, 32> = Channel::new();
 /// キーボードの組み合わせ（Ctrl+Alt+Shift+Gui+Enter+U）で OTA モードに入る要求。
 static OTA_REQUEST: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// OTA モードで起動するためのフラグ。RTC メモリは再起動をまたいで残る（電源を入れ直すと消える）。
+/// OTA の要求を受けたら、これを立てて再起動し、起動直後（BLE の状態が新しいうち）に OTA モードに入る。
+const OTA_BOOT_MAGIC: u32 = 0x4F54_4131;
+#[esp_hal::ram(unstable(rtc_fast, persistent))]
+static mut OTA_BOOT_FLAG: u32 = 0;
+
+/// OTA モードで再起動する。
+fn request_ota_reboot() -> ! {
+    info!("ota: rebooting into OTA mode");
+    unsafe { core::ptr::addr_of_mut!(OTA_BOOT_FLAG).write_volatile(OTA_BOOT_MAGIC) };
+    esp_hal::system::software_reset()
+}
+
+/// 起動時に呼ぶ。OTA モードでの再起動なら true（フラグはここで消す）。
+fn take_ota_boot_flag() -> bool {
+    let flag = unsafe { core::ptr::addr_of_mut!(OTA_BOOT_FLAG) };
+    let on = unsafe { flag.read_volatile() } == OTA_BOOT_MAGIC;
+    unsafe { flag.write_volatile(0) };
+    on
+}
+
 /// 修飾キーに Ctrl・Shift・Alt・Gui（左右どちらでも）がそろい、Enter(0x28) と U(0x18) が押されている。
 fn is_ota_chord(modifiers: u8, keys: &[Option<core::num::NonZeroU8>; 6]) -> bool {
     let hyper = modifiers & 0x11 != 0 && modifiers & 0x22 != 0 && modifiers & 0x44 != 0 && modifiers & 0x88 != 0;
@@ -372,6 +393,9 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     let app = async {
+        if take_ota_boot_flag() {
+            ota_mode(&mut peripheral, &server, &flash).await;
+        }
         loop {
             let conn = match select(advertise(&mut peripheral, &server, NAME, &Default::default()), OTA_REQUEST.wait()).await {
                 Either::First(Ok(conn)) => conn,
@@ -380,15 +404,14 @@ async fn main(spawner: Spawner) -> ! {
                     Timer::after(Duration::from_secs(1)).await;
                     continue;
                 }
-                Either::Second(()) => ota_mode(&mut peripheral, &server, &flash).await,
+                Either::Second(()) => request_ota_reboot(),
             };
             info!("connected");
             // ボンディングを許可（これが無いと PairingComplete の bond が None になり保存されない）。
             let _ = conn.raw().set_bondable(true);
             let _ = conn.raw().request_security();
             if let SessionEnd::Ota = session(&server, &conn, &store).await {
-                drop(conn);
-                ota_mode(&mut peripheral, &server, &flash).await;
+                request_ota_reboot();
             }
             info!("disconnected");
         }
