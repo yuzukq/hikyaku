@@ -93,6 +93,14 @@ pub fn parse_absolute(d: &[u8; 6]) -> AbsoluteData {
     }
 }
 
+/// `read_absolute_checked` の結果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Checked {
+    pub data: AbsoluteData,
+    /// 2 回読んだ結果が食い違った（3 回目で多数決した）。SPI 読み取りの誤りの目安。
+    pub disagreed: bool,
+}
+
 /// `init` の結果。ファームウェア ID/バージョンで疎通を確認する（参考実装では ID=0x07, Ver=0x3A）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Info {
@@ -178,6 +186,39 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
         self.read_regs(reg::PACKET_BYTE_0, &mut d)?;
         self.clear_flags()?;
         Ok(Some(parse_absolute(&d)))
+    }
+}
+
+impl<SPI: SpiDevice> Pinnacle<SPI> {
+    /// `read_absolute` と同じだが、パケットを 2 回読んで比べ、食い違ったら 3 回目を読んでビットごとに多数決する。
+    ///
+    /// 実機で、座標の bit7（±128）が一部のサンプルで反転する誤りがあった（Y で約 5%）ため。
+    /// データが凍結されている間（フラグをクリアするまで）に読むので、複数回読んでも同じパケットが得られる。
+    pub fn read_absolute_checked(&mut self) -> Result<Option<Checked>, Error<SPI::Error>> {
+        let st = self.read_reg(reg::STATUS1)?;
+        if st & (status::SW_DR | status::SW_CC) == 0 {
+            if st != 0 {
+                self.clear_flags()?;
+            }
+            return Ok(None);
+        }
+        let mut a = [0u8; 6];
+        let mut b = [0u8; 6];
+        self.read_regs(reg::PACKET_BYTE_0, &mut a)?;
+        self.read_regs(reg::PACKET_BYTE_0, &mut b)?;
+        let (packet, disagreed) = if a == b {
+            (a, false)
+        } else {
+            let mut c = [0u8; 6];
+            self.read_regs(reg::PACKET_BYTE_0, &mut c)?;
+            let mut m = [0u8; 6];
+            for i in 0..6 {
+                m[i] = (a[i] & b[i]) | (a[i] & c[i]) | (b[i] & c[i]);
+            }
+            (m, true)
+        };
+        self.clear_flags()?;
+        Ok(Some(Checked { data: parse_absolute(&packet), disagreed }))
     }
 }
 
@@ -328,6 +369,70 @@ mod tests {
         let mut p = Pinnacle::new(m);
         assert_eq!(p.read_absolute().unwrap(), None);
         assert_eq!(p.release().regs[reg::STATUS1 as usize], 0);
+    }
+
+    /// 読み出しのたびに、決まった番号の読み出し（0 始まり、データ読み出しのみ数える）でビットを反転させるモック。
+    struct Flaky {
+        inner: Mock,
+        reads: usize,
+        /// (何回目の読み出しか, 読み出し結果の何バイト目か, XOR するマスク)
+        corrupt: std::vec::Vec<(usize, usize, u8)>,
+    }
+
+    impl ErrorType for Flaky {
+        type Error = Infallible;
+    }
+
+    impl SpiDevice for Flaky {
+        fn transaction(&mut self, ops: &mut [Operation<'_, u8>]) -> Result<(), Infallible> {
+            self.inner.transaction(ops)?;
+            for op in ops {
+                if let Operation::Transfer(rx, tx) = op {
+                    // 6 バイトのパケット読み出し（3 + 6）だけを数える
+                    if rx.len() == 9 && tx[0] == (0xA0 | reg::PACKET_BYTE_0) {
+                        for &(n, byte, mask) in &self.corrupt {
+                            if n == self.reads {
+                                rx[3 + byte] ^= mask;
+                            }
+                        }
+                        self.reads += 1;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn flaky(corrupt: &[(usize, usize, u8)]) -> Pinnacle<Flaky> {
+        let mut m = Mock::new();
+        m.regs[reg::STATUS1 as usize] = status::SW_DR;
+        m.regs[0x12..0x18].copy_from_slice(&[0, 0, 0x7F, 0xFB, 0x12, 0x0C]);
+        Pinnacle::new(Flaky { inner: m, reads: 0, corrupt: corrupt.to_vec() })
+    }
+
+    #[test]
+    fn checked_read_agrees_without_errors() {
+        let mut p = flaky(&[]);
+        let c = p.read_absolute_checked().unwrap().unwrap();
+        assert!(!c.disagreed);
+        assert_eq!((c.data.x, c.data.y), (0x27F, 0x1FB & 0x7FF));
+    }
+
+    #[test]
+    fn checked_read_fixes_a_flipped_bit7_by_majority() {
+        // 1 回目の読み出しで Y 下位バイト（3 バイト目）の bit7 が反転した。
+        let mut p = flaky(&[(0, 3, 0x80)]);
+        let c = p.read_absolute_checked().unwrap().unwrap();
+        assert!(c.disagreed);
+        assert_eq!(c.data.y, 0x1FB, "majority restores the real value");
+    }
+
+    #[test]
+    fn checked_read_fixes_an_error_in_the_second_read_too() {
+        let mut p = flaky(&[(1, 2, 0x80)]);
+        let c = p.read_absolute_checked().unwrap().unwrap();
+        assert!(c.disagreed);
+        assert_eq!(c.data.x, 0x27F);
     }
 
     #[test]

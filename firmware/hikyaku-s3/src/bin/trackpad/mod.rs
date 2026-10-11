@@ -50,6 +50,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
     let mut dr_high = 0u32;
     let mut reports = 0u32;
     let mut read_errors = 0u32;
+    let mut disagreed = 0u32;
     let mut last_log = Instant::now();
     let mut last_raw = (0u16, 0u16, 0u8);
     let mut was_touching = false;
@@ -60,8 +61,12 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
         if dr.is_high() {
             dr_high += 1;
         }
-        match pad.read_absolute() {
-            Ok(Some(d)) => {
+        match pad.read_absolute_checked() {
+            Ok(Some(c)) => {
+                let d = c.data;
+                if c.disagreed {
+                    disagreed += 1;
+                }
                 packets += 1;
                 last_raw = (d.x, d.y, d.z);
                 #[cfg(feature = "trackpad-trace")]
@@ -89,8 +94,8 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
             if packets > 0 || reports > 0 || dr_high > 0 || read_errors > 0 {
                 let status1 = pad.read_reg(hikyaku_pinnacle::reg::STATUS1).ok();
                 info!(
-                    "trackpad: polls={} packets={} touching={} dr_high={} reports={} errors={} status1={:?} last(x,y,z)={:?}",
-                    polls, packets, touch_packets, dr_high, reports, read_errors, status1, last_raw
+                    "trackpad: polls={} packets={} touching={} dr_high={} reports={} errors={} disagreed={} status1={:?} last(x,y,z)={:?}",
+                    polls, packets, touch_packets, dr_high, reports, read_errors, disagreed, status1, last_raw
                 );
             }
             polls = 0;
@@ -99,6 +104,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
             dr_high = 0;
             reports = 0;
             read_errors = 0;
+            disagreed = 0;
             last_log = Instant::now();
         }
         // Pinnacle のサンプルレートは約 100Hz。それに合わせる。
