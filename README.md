@@ -13,7 +13,7 @@
 
 | 役割 | 部品 | メモ |
 |---|---|---|
-| マイコン | ESP32-S3 ボード（USB-C 1 ポート。Super Mini 系、型名は要確認） | USB OTG でホストになれる + BLE。1チップで完結 |
+| マイコン | ESP32-S3 ボード（USB-C 1 ポート。ESP32-S3FH4R2 搭載。AliExpress 品） | USB OTG でホストになれる + BLE。1チップで完結 |
 | トラックパッド | Cirque Pinnacle TM035035（SPI 版） | 35mm 円形。J1 は 12 ピン 0.5mm FFC |
 | USB 接続 | USB-C ⇔ USB-C ケーブル | ESP32-S3 ボードの USB-C をホストポートとして使う |
 | 電源 | モバイルバッテリー（Type-C）+ 秋月 Type-C DIP 化キット（CC に 5.1kΩ ×2） | S3 の 5V ピンへ給電。キーボードにも供給される |

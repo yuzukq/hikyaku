@@ -3,7 +3,7 @@
 ## ボードについて
 
 手元の S3 ボードは **Seeed XIAO ではない**（ピンに GPIO 番号が印字されている。`espflash board-info` は Flash 4MB / Embedded Flash。
-型名は未確認で、Super Mini 系と思われる）。このため、ピンは **GPIO 番号**で書く。
+商品名は「ESP32 S3 ESP32-S3FH4R2」（AliExpress）。チップは ESP32-S3FH4R2 で、フラッシュ 4MB と PSRAM 2MB を内蔵）。このため、ピンは **GPIO 番号**で書く。
 ボード上で使えるのは `GPIO1`〜`GPIO13` のほか、`5V` / `GND` / `3V3`、`TX`(=GPIO43) などの印字ピン。
 
 ## ピン割り当て
