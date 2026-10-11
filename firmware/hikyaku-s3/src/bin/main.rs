@@ -31,7 +31,7 @@ use embassy_usb_host::{
     BusState,
 };
 use esp_radio::ble::controller::BleConnector;
-use log::{info, warn};
+use log::{debug, info, warn};
 use trouble_host::prelude::*;
 
 use esp_backtrace as _;
@@ -409,8 +409,8 @@ async fn session<P: PacketPool>(
                 GattConnectionEvent::PairingFailed(e) => warn!("pairing failed: {:?}", e),
                 GattConnectionEvent::Gatt { event } => {
                     match &event {
-                        GattEvent::Write(w) => w.with_data(|_, d| info!("gatt write handle={} data={:?}", w.handle(), d)),
-                        GattEvent::Read(r) => info!("gatt read handle={}", r.handle()),
+                        GattEvent::Write(w) => w.with_data(|_, d| debug!("gatt write handle={} data={:?}", w.handle(), d)),
+                        GattEvent::Read(r) => debug!("gatt read handle={}", r.handle()),
                         _ => {}
                     }
                     match event.accept() {
@@ -440,7 +440,7 @@ async fn session<P: PacketPool>(
         }
         loop {
             let r = REPORTS.receive().await;
-            info!("forward report");
+            debug!("forward report");
             let res = match r {
                 Report::Key(v) => server.hid.keyboard_in.notify(conn, &v, false).await,
                 Report::Mouse(v) => server.hid.mouse_in.notify(conn, &v, false).await,

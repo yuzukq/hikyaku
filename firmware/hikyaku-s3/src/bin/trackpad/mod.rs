@@ -42,17 +42,61 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
 
     let mut pointer = Pointer::new(Config::default());
     let mut touch: Option<(u16, u16)> = None;
+
+    // 診断用の集計（1 秒ごとにログへ）。実機でカーソルが動かないときの切り分け用。
+    let mut polls = 0u32;
+    let mut packets = 0u32;
+    let mut touch_packets = 0u32;
+    let mut dr_high = 0u32;
+    let mut reports = 0u32;
+    let mut read_errors = 0u32;
+    let mut last_log = Instant::now();
+    let mut last_raw = (0u16, 0u16, 0u8);
+    let mut was_touching = false;
+
     loop {
+        // DR ピンに頼らず Status1 を毎回見る（DR の配線が不安定でも読めるように）。
+        polls += 1;
         if dr.is_high() {
-            match pad.read_absolute() {
-                Ok(Some(d)) => touch = d.touching().then_some((d.x, d.y)),
-                Ok(None) => {}
-                Err(_) => warn!("trackpad: read failed"),
+            dr_high += 1;
+        }
+        match pad.read_absolute() {
+            Ok(Some(d)) => {
+                packets += 1;
+                last_raw = (d.x, d.y, d.z);
+                if d.touching() {
+                    touch_packets += 1;
+                }
+                touch = d.touching().then_some((d.x, d.y));
+                if d.touching() != was_touching {
+                    info!("trackpad: {} x={} y={} z={}", if d.touching() { "touch" } else { "release" }, d.x, d.y, d.z);
+                    was_touching = d.touching();
+                }
             }
+            Ok(None) => {}
+            Err(_) => read_errors += 1,
         }
         let now = Instant::now().as_millis() as u32;
         if let Some(r) = pointer.update(now, touch, SCROLL_MODE.load(Ordering::Relaxed)) {
+            reports += 1;
             let _ = REPORTS.try_send(Report::Mouse(r.to_bytes()));
+        }
+
+        if last_log.elapsed() >= Duration::from_secs(1) {
+            // 何も起きていない間は出さない（ログが流れすぎないように）
+            if packets > 0 || reports > 0 || dr_high > 0 || read_errors > 0 {
+                info!(
+                    "trackpad: polls={} packets={} touching={} dr_high={} reports={} errors={} last(x,y,z)={:?}",
+                    polls, packets, touch_packets, dr_high, reports, read_errors, last_raw
+                );
+            }
+            polls = 0;
+            packets = 0;
+            touch_packets = 0;
+            dr_high = 0;
+            reports = 0;
+            read_errors = 0;
+            last_log = Instant::now();
         }
         Timer::after(Duration::from_millis(5)).await;
     }
