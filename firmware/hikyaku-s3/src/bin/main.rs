@@ -371,7 +371,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let app = async {
         loop {
-            let conn = match select(advertise(&mut peripheral, &server, NAME), OTA_REQUEST.wait()).await {
+            let conn = match select(advertise(&mut peripheral, &server, NAME, &Default::default()), OTA_REQUEST.wait()).await {
                 Either::First(Ok(conn)) => conn,
                 Either::First(Err(e)) => {
                     warn!("advertise error: {:?}", e);
@@ -401,6 +401,7 @@ async fn advertise<'v, 's, C: Controller>(
     peripheral: &mut Peripheral<'v, C, DefaultPacketPool>,
     server: &'s Server<'v>,
     name: &str,
+    params: &AdvertisementParameters,
 ) -> Result<GattConnection<'v, 's, DefaultPacketPool>, BleHostError<C::Error>> {
     let mut adv = [0u8; 31];
     let len = AdStructure::encode_slice(
@@ -413,7 +414,7 @@ async fn advertise<'v, 's, C: Controller>(
     )?;
     let advertiser = peripheral
         .advertise(
-            &Default::default(),
+            params,
             Advertisement::ConnectableScannableUndirected { adv_data: &adv[..len], scan_data: &[] },
         )
         .await?;
@@ -541,8 +542,22 @@ async fn ota_session<'v, C: Controller>(
     ota: &mut ota::Ota<'_, '_>,
 ) {
     let (ctrl_h, data_h) = (server.ota.ctrl.handle, server.ota.data.handle);
+    // 接続を受ける相手を PC に限る（指定がなければ誰でも。HMAC 認証は常に必要）。
+    let mut params = AdvertisementParameters::default();
+    if let Some(peer) = ota::peer() {
+        let addr = Address::new(AddrKind::PUBLIC, BdAddr::new(peer));
+        match peripheral.set_filter_accept_list(&[addr]).await {
+            Ok(()) => {
+                params.filter_policy = AdvFilterPolicy::FilterConn;
+                info!("ota: accepting connections only from the configured PC");
+            }
+            Err(_) => warn!("ota: could not set the accept list"),
+        }
+    } else {
+        warn!("ota: HIKYAKU_OTA_PEER not set; accepting any central");
+    }
     loop {
-        let conn = match advertise(peripheral, server, "hikyaku-OTA").await {
+        let conn = match advertise(peripheral, server, "hikyaku-OTA", &params).await {
             Ok(c) => c,
             Err(e) => {
                 warn!("ota: advertise error: {:?}", e);

@@ -5,6 +5,7 @@ fn main() {
     println!("cargo:rustc-link-arg=-Tlinkall.x");
     // OTA の共有鍵が変わったら再ビルドする。
     println!("cargo:rerun-if-env-changed=HIKYAKU_OTA_KEY");
+    println!("cargo:rerun-if-env-changed=HIKYAKU_OTA_PEER");
 }
 
 #[cfg(unix)]

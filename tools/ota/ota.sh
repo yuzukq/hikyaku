@@ -12,6 +12,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 FW="$ROOT/firmware/hikyaku-s3"
 KEYFILE="${HIKYAKU_OTA_KEYFILE:-$HOME/.config/hikyaku/ota.key}"
+PEERFILE="${HIKYAKU_OTA_PEERFILE:-$HOME/.config/hikyaku/ota.peer}"
 VENV="$ROOT/tools/ota/.venv"
 FEATURES="${FEATURES:-trackpad}"
 ELF="$FW/target/xtensa-esp32s3-none-elf/release/hikyaku-s3"
@@ -32,6 +33,9 @@ cmd_init() {
   else
     echo "key exists: $KEYFILE"
   fi
+  # OTA モードで接続を受ける相手 = この PC の BLE アドレス（Mac など他のホストを弾くため）
+  bluetoothctl list 2>/dev/null | awk '/^Controller/{print $2; exit}' > "$PEERFILE"
+  echo "OTA peer (this PC): $(cat "$PEERFILE")"
   [ -d "$VENV" ] || python3 -m venv "$VENV"
   "$VENV/bin/pip" install -q bleak
   echo "ready"
@@ -40,7 +44,8 @@ cmd_init() {
 cmd_build() {
   need_env
   [ -f "$KEYFILE" ] || { echo "no key. run: $0 init"; exit 1; }
-  ( cd "$FW" && HIKYAKU_OTA_KEY="$(cat "$KEYFILE")" cargo build --release --features "$FEATURES" )
+  PEER=""; [ -s "$PEERFILE" ] && PEER="$(cat "$PEERFILE")"
+  ( cd "$FW" && HIKYAKU_OTA_KEY="$(cat "$KEYFILE")" HIKYAKU_OTA_PEER="$PEER" cargo build --release --features "$FEATURES" )
   espflash save-image --chip esp32s3 "$ELF" "$BIN"
   echo "image: $BIN ($(stat -c %s "$BIN") bytes)"
 }

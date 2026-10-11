@@ -63,6 +63,23 @@ pub enum Status {
     BadRequest = 8,
 }
 
+/// OTA モードで接続を受ける相手（PC の BLE アドレス、`HIKYAKU_OTA_PEER`。`AA:BB:CC:DD:EE:FF` 形式）。
+/// これを指定すると、OTA モード中は **その PC 以外の接続を受けない**（Mac など、同じアドレスで自動再接続してくる相手を弾く）。
+pub fn peer() -> Option<[u8; 6]> {
+    let text = option_env!("HIKYAKU_OTA_PEER")?;
+    let mut out = [0u8; 6];
+    let mut n = 0;
+    for part in text.split(':') {
+        if n >= 6 {
+            return None;
+        }
+        // BLE のアドレスはリトルエンディアン（表記の逆順）で持つ。
+        out[5 - n] = u8::from_str_radix(part, 16).ok()?;
+        n += 1;
+    }
+    (n == 6).then_some(out)
+}
+
 /// ビルド時の鍵（`HIKYAKU_OTA_KEY`）。無ければ OTA は無効。
 pub fn key() -> Option<[u8; 32]> {
     let hex = option_env!("HIKYAKU_OTA_KEY")?.as_bytes();

@@ -19,6 +19,9 @@ tools/ota/ota.sh upload     # BLE で送信 → 検証 → 再起動
 
 OTA モードは 180 秒で自動的に通常に戻る（再起動）。アップロード中は Mac との接続が切れ、再起動後に自動で戻る。
 
+**OTA モードで接続を受けるのは、`ota.sh init` で記録した PC（BLE アドレス）だけ**（`~/.config/hikyaku/ota.peer`、ビルド時に `HIKYAKU_OTA_PEER` として埋め込む）。
+Mac のように同じアドレスで自動再接続してくる相手を弾くため。このアドレスを入れていない（古い）ファームに OTA するときだけは、**Mac の Bluetooth を切って**から OTA モードに入る。
+
 ## 仕組み
 
 - **パーティション表**（`firmware/hikyaku-s3/partitions.csv`）: `nvs`（0x9000、ボンディングの保存先）/ `otadata` / `phy_init` / `ota_0` / `ota_1`（各 1.875MB）。
