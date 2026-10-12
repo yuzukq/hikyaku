@@ -69,6 +69,12 @@ cmd_flash() {
   local tries=0
   while true; do
     if s3_present && [ -e "$PORT" ]; then
+      # 他のプロセス（ログ取得など）がポートを開いていると、書き込みが失敗する
+      if command -v fuser >/dev/null && fuser "$PORT" >/dev/null 2>&1; then
+        c_err "$PORT を他のプロセスが使っています。止めてから、もう一度実行してください:"
+        fuser -v "$PORT" >&2 || true
+        exit 1
+      fi
       if espflash flash --port "$PORT" --partition-table "$FW/partitions.csv" "$ELF"; then
         c_ok "書き込み完了。S3 を抜いて、キーボードと CH9102F を元に戻してください。"
         return 0
