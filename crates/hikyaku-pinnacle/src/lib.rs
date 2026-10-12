@@ -137,6 +137,8 @@ pub struct Relative {
     /// 画面の座標系（下が +）に直してある。
     pub dy: i16,
     pub wheel: i8,
+    /// デコード前のバイト（レジスタ 0x12〜0x15）。診断用。
+    pub raw: [u8; 4],
 }
 
 /// 相対モードのパケット（レジスタ 0x12〜0x15）を解釈する（QMK の `cirque_pinnacle_read_data` と同じ）。
@@ -144,7 +146,7 @@ pub struct Relative {
 pub fn parse_relative(d: &[u8; 4]) -> Relative {
     let dx = if d[0] & 0x10 != 0 && d[1] != 0 { -(256 - d[1] as i16) } else { d[1] as i16 };
     let dy = if d[0] & 0x20 != 0 && d[2] != 0 { 256 - d[2] as i16 } else { -(d[2] as i16) };
-    Relative { buttons: d[0] & 0x07, dx, dy, wheel: d[3] as i8 }
+    Relative { buttons: d[0] & 0x07, dx, dy, wheel: d[3] as i8, raw: *d }
 }
 
 /// `read_absolute_checked` の結果。
@@ -693,7 +695,8 @@ mod tests {
     #[test]
     fn parses_relative_packet_like_qmk() {
         // 右へ +5。パッドの Y は上が + なので、符号ビットなしの 3 は画面では上へ（-3）
-        assert_eq!(parse_relative(&[0x00, 5, 3, 0]), Relative { buttons: 0, dx: 5, dy: -3, wheel: 0 });
+        let r = parse_relative(&[0x00, 5, 3, 0]);
+        assert_eq!((r.buttons, r.dx, r.dy, r.wheel), (0, 5, -3, 0));
         // X が負（符号ビット + 補数）: -3、Y が負側（符号ビット）: 上へ
         let r = parse_relative(&[0x10 | 0x20, 0xFD, 0xFB, 0xFF]);
         assert_eq!((r.dx, r.dy, r.wheel), (-3, 5, -1));

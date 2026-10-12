@@ -255,7 +255,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
                 }
                 last_buttons = r.buttons;
                 #[cfg(feature = "trackpad-trace")]
-                info!("rel {} dx={} dy={} btn={} wheel={}", Instant::now().as_millis() as u32, r.dx, r.dy, r.buttons, r.wheel);
+                info!("rel {} raw={:02x?} dx={} dy={}", Instant::now().as_millis() as u32, r.raw, r.dx, r.dy);
                 let now = Instant::now().as_millis() as u32;
                 if let Some(rep) =
                     pointer.update_relative(now, r.dx as i32, r.dy as i32, r.buttons, SCROLL_MODE.load(Ordering::Relaxed))
