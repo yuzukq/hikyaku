@@ -67,15 +67,19 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
     let mut khz = 0u32;
     #[cfg(feature = "trackpad-trace")]
     let mut sweep_idx = 0usize;
+    // 起動直後は経過時間が短く、`Instant::now() - Duration` はアンダーフローしてパニックする。引き算はしない。
     #[cfg(feature = "trackpad-trace")]
-    let mut last_switch = Instant::now() - Duration::from_secs(SWEEP_SECS);
+    let mut last_switch = Instant::now();
+    #[cfg(feature = "trackpad-trace")]
+    let mut first_switch = true;
     let mut last_log = Instant::now();
     let mut last_raw = (0u16, 0u16, 0u8);
     let mut was_touching = false;
 
     loop {
         #[cfg(feature = "trackpad-trace")]
-        if last_switch.elapsed() >= Duration::from_secs(SWEEP_SECS) {
+        if first_switch || last_switch.elapsed() >= Duration::from_secs(SWEEP_SECS) {
+            first_switch = false;
             khz = SWEEP_KHZ[sweep_idx % SWEEP_KHZ.len()];
             sweep_idx += 1;
             last_switch = Instant::now();
