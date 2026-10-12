@@ -10,9 +10,12 @@ path = "./src/bin/main.rs"
 
 [features]
 selftest = []
+# USB キーボードのレポート（修飾キー・キーコード）を 1 つずつログに出す。OTA の組み合わせキーが検出されないときの切り分け用。
+usb-trace = []
 # トラックパッド（SPI）。コネクタが届くまで既定では無効。
 trackpad = ["dep:hikyaku-pinnacle", "dep:hikyaku-pointer", "dep:embedded-hal-bus"]
-# 生データ（tp <ms> <x> <y> <z>）をログに出す。tools の replay で再生して調整する。
+# 生データ（相対モード: `rel <ms> raw=[b0, b1, b2] dx= dy=`、絶対座標: `tp <ms> <x> <y> <z>`）をログに出す。
+# ホストで再生できる（`cargo run -p hikyaku-pointer --example replay_rel -- <log>`。tools/traces/README.md）。
 trackpad-trace = ["trackpad"]
 # 静止中のぶれ（指を置いたままでの ±1〜2 の揺れ）を抑えるフィルタ（hikyaku_pointer::relative::StillFilter）。
 # 動き始めの反応は鈍らせない（1 パケットで大きく動いたときはそのまま通す）。既定は無効。

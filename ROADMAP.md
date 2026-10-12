@@ -38,7 +38,8 @@
 - [x] 座標 → 相対移動の変換 `crates/hikyaku-pointer`（クリップ・加速・平滑化・タップ・ドラッグ・スクロール。単体テスト済み）
 - [x] S3 ファームへ組み込み（`--features trackpad`、ビルド確認済み。実機未確認）
 - [x] 実機で疎通確認（2026-10-11）: SPI モード 1 / 1MHz、`trackpad: firmware id=0x07 version=0x3a`（参考実装の値と一致）
-- [ ] 向き・感度・タップ判定を実機で調整
+- [x] 相対モードの変換をホストでテストできる形に切り出し、実機ログを再生できるようにした（2026-10-13 夜、クラウド。`crates/hikyaku-pointer/src/relative.rs`）
+- [ ] 向き・感度・タップ判定を実機で調整（候補は feature で用意済み: `trackpad-still-filter` / `trackpad-soft-tap` / `trackpad-sens-{1x,2x,3x}`。1 つずつ試す）
 - [ ] スクロール: Pinnacle は**単一指のみ**と理解している（要確認）。2 本指は不可なので、キー押下中スクロール／縁での円スクロールで代替
 
 ## Phase 5: HID の拡充

@@ -71,6 +71,10 @@ ZMK（Zephyr の `drivers/input/input_pinnacle.c`）と Cirque 公式の USB マ
   向きはファーム側（`SWAP_XY`・`SCREEN_X_INVERT`・`SCREEN_Y_INVERT`）で合わせる。この個体はパッドが 90 度回った向きで付いている。
 - パケットは 3 バイト。`dx = b1 (b0 の bit4 が立っていたら -256)`、`dy` も同様（bit5）。タップは `b0` の bit0。
 - 向き・反転・XY 入れ替えは `firmware/hikyaku-s3/src/bin/trackpad/mod.rs` の `SWAP_XY`・`SCREEN_*_INVERT`。
+- 変換そのもの（向き・倍率・持ち越し・レポートの分割）は `crates/hikyaku-pointer/src/relative.rs`（`Relay`）。ホストで実機ログを
+  再生してテストできる（[../../tools/traces/README.md](../../tools/traces/README.md)）。静止中のぶれを抑えるフィルタ（`StillFilter`）と
+  自前のタップ判定（`SoftTap`）も同じファイルにあり、ファームでは `trackpad-still-filter` / `trackpad-soft-tap` feature で有効にする
+  （既定は無効。[../firmware.md](../firmware.md) の feature 一覧）。
 
 
 
