@@ -16,3 +16,18 @@ awk '/ESP-ROM|rst:0x/{b++} /rel [0-9]+ raw=/{ if ($0 ~ /fc, fc, fc/) fc[b]++; el
 
 **きれいな配線での動きのログは、まだない。** 基板化（[docs/hardware/assembly.md](../../docs/hardware/assembly.md)）の後に、
 `FEATURES="trackpad trackpad-selftest trackpad-trace" tools/hk flash` → `tools/hk log` で取り直す予定。
+
+## ホストで再生する
+
+相対モードの変換（軸の入れ替え・反転・倍率・持ち越し・レポートの分割）は `crates/hikyaku-pointer/src/relative.rs` にあり、
+ファームと同じ処理をホストで再生できる。
+
+```sh
+# 1 パケットごとに出るマウスレポートと集計を見る（quiet=1 で集計だけ。skip_fc=1 で配線不良のゴミを読み飛ばす）
+cargo run -q -p hikyaku-pointer --example replay_rel -- tools/traces/2026-10-13-relative-all.log quiet=1 skip_fc=1
+# 設定を変えて試す（既定はファームの値: gain=2 swap=1 invx=1 invy=1 scroll_div=8）
+cargo run -q -p hikyaku-pointer --example replay_rel -- tools/traces/2026-10-13-relative-all.log gain=1
+```
+
+`cargo test -p hikyaku-pointer` は、このログ全体と乱数のパケットで、切り出した処理がファームの元のコード（テスト内の `Golden`）と
+1 ビットも違わない出力を出すことを確かめる。

@@ -26,6 +26,8 @@ use esp_hal::{
 use hikyaku_pinnacle::{Attenuation, Pinnacle, RelativeOptions};
 #[cfg(feature = "trackpad-lowbyte")]
 use hikyaku_pointer::tracker::LowByteTracker;
+#[cfg(not(feature = "trackpad-absolute"))]
+use hikyaku_pointer::relative::{Config as RelayConfig, Relay};
 #[cfg(feature = "trackpad-absolute")]
 use hikyaku_pointer::{Config, Pointer};
 use log::{info, warn};
@@ -304,8 +306,14 @@ const REL_GAIN: i32 = 2;
 #[cfg(not(feature = "trackpad-absolute"))]
 const SCROLL_DIV: i32 = 8;
 
+/// 相対モードの変換の設定（上の定数をまとめたもの。`hikyaku_pointer::relative::Config::FIRMWARE_DEFAULT` と同じ値）。
+#[cfg(not(feature = "trackpad-absolute"))]
+fn relay_config() -> RelayConfig {
+    RelayConfig { swap_xy: SWAP_XY, invert_x: SCREEN_X_INVERT, invert_y: SCREEN_Y_INVERT, gain: REL_GAIN, scroll_div: SCROLL_DIV }
+}
+
 /// 相対モード（既定）。ZMK（Zephyr の input_pinnacle）や Cirque 公式の USB マウスのサンプルと同じく、
-/// **パッドが計算した移動量を 1:1 でそのまま**マウスレポートにする（加工しない。加速は OS に任せる）。
+/// **パッドが計算した移動量をそのまま**（向きを合わせ、`REL_GAIN` 倍して）マウスレポートにする（加速は OS に任せる）。
 #[cfg(not(feature = "trackpad-absolute"))]
 #[embassy_executor::task]
 pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'static>) {
@@ -335,63 +343,38 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
         }
     }
 
-    // i8 に収まらない分は次に持ち越す
-    let (mut carry_x, mut carry_y, mut carry_wheel) = (0i32, 0i32, 0i32);
-    let mut last_buttons = 0u8;
+    // 変換（軸の入れ替え・反転・倍率・持ち越し・レポートの分割）は `hikyaku_pointer::relative` にある。
+    // ホストで実機ログを再生してテストできる（`cargo test -p hikyaku-pointer`、`examples/replay_rel.rs`）。
+    let mut relay = Relay::new(relay_config());
 
     // 診断用の集計（1 秒ごと）
     let (mut packets, mut reports, mut errors) = (0u32, 0u32, 0u32);
     let (mut sum_dx, mut sum_dy, mut max_step, mut clicks) = (0i32, 0i32, 0i32, 0u32);
+    let mut last_buttons = 0u8;
     let mut last_log = Instant::now();
 
     loop {
+        let now = Instant::now().as_millis() as u32;
+        // 出すレポートを BLE へ流し、集計する
+        let mut emit = |r: [u8; 5]| {
+            if r[0] & 1 != 0 && last_buttons & 1 == 0 {
+                clicks += 1;
+            }
+            last_buttons = r[0];
+            let _ = REPORTS.try_send(Report::Mouse(r));
+            reports += 1;
+        };
         match pad.read_relative() {
             Ok(Some(r)) => {
                 packets += 1;
                 sum_dx += r.dx as i32;
                 sum_dy += r.dy as i32;
                 max_step = max_step.max((r.dx as i32).abs()).max((r.dy as i32).abs());
-                if r.buttons & 1 != 0 && last_buttons & 1 == 0 {
-                    clicks += 1;
-                }
                 #[cfg(feature = "trackpad-trace")]
-                info!("rel {} raw={:02x?} dx={} dy={}", Instant::now().as_millis() as u32, r.raw, r.dx, r.dy);
-
-                let buttons = r.buttons & 1; // タップ = 左クリック
-                let (mut sx, mut sy) = if SWAP_XY { (r.dy as i32, r.dx as i32) } else { (r.dx as i32, r.dy as i32) };
-                if SCREEN_X_INVERT {
-                    sx = -sx;
-                }
-                if SCREEN_Y_INVERT {
-                    sy = -sy;
-                }
-                if SCROLL_MODE.load(Ordering::Relaxed) {
-                    carry_wheel += -sy;
-                } else {
-                    carry_x += sx * REL_GAIN;
-                    carry_y += sy * REL_GAIN;
-                }
-                let wheel = (carry_wheel / SCROLL_DIV).clamp(-127, 127);
-                carry_wheel -= wheel * SCROLL_DIV;
-                // 1 パケットぶんを送り切る（大きいときは 127 ずつ分けて送る）
-                loop {
-                    let x = carry_x.clamp(-127, 127);
-                    let y = carry_y.clamp(-127, 127);
-                    if x == 0 && y == 0 && wheel == 0 && buttons == last_buttons {
-                        break;
-                    }
-                    carry_x -= x;
-                    carry_y -= y;
-                    let w = if wheel != 0 && x == 0 && y == 0 { wheel } else { 0 };
-                    let _ = REPORTS.try_send(Report::Mouse([buttons, x as i8 as u8, y as i8 as u8, w as i8 as u8, 0]));
-                    reports += 1;
-                    last_buttons = buttons;
-                    if carry_x == 0 && carry_y == 0 {
-                        break;
-                    }
-                }
+                info!("rel {} raw={:02x?} dx={} dy={}", now, r.raw, r.dx, r.dy);
+                relay.push(now, &r, SCROLL_MODE.load(Ordering::Relaxed), &mut emit);
             }
-            Ok(None) => {}
+            Ok(None) => relay.poll(now, &mut emit),
             Err(_) => errors += 1,
         }
         if last_log.elapsed() >= Duration::from_secs(1) {

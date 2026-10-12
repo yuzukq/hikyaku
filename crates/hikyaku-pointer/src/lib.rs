@@ -13,6 +13,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod relative;
 pub mod tracker;
 
 /// マウスレポート（BLE HID の ID2 と同じ並び）。
