@@ -281,6 +281,17 @@ const REL_OPTIONS: RelativeOptions = RelativeOptions {
     swap_xy: false,
 };
 
+/// パッドの軸と画面の軸の対応（基板裏の印字が読める向きを「上」とする）。
+/// 実機（2026-10-13）: 上→下のスワイプでパッドの dx が負になっていた（パッドが 90 度回った向きで付いている）。
+/// そこで X と Y を入れ替え、画面の Y はパッドの dx の符号を反転したものにする。
+/// 左右が逆なら `SCREEN_X_INVERT` を、上下が逆なら `SCREEN_Y_INVERT` を切り替える。
+#[cfg(not(feature = "trackpad-absolute"))]
+const SWAP_XY: bool = true;
+#[cfg(not(feature = "trackpad-absolute"))]
+const SCREEN_X_INVERT: bool = false;
+#[cfg(not(feature = "trackpad-absolute"))]
+const SCREEN_Y_INVERT: bool = true;
+
 /// スクロールモードで、ホイール 1 目盛りに相当する移動量。
 #[cfg(not(feature = "trackpad-absolute"))]
 const SCROLL_DIV: i32 = 8;
@@ -334,11 +345,18 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
                 info!("rel {} raw={:02x?} dx={} dy={}", Instant::now().as_millis() as u32, r.raw, r.dx, r.dy);
 
                 let buttons = r.buttons & 1; // タップ = 左クリック
+                let (mut sx, mut sy) = if SWAP_XY { (r.dy as i32, r.dx as i32) } else { (r.dx as i32, r.dy as i32) };
+                if SCREEN_X_INVERT {
+                    sx = -sx;
+                }
+                if SCREEN_Y_INVERT {
+                    sy = -sy;
+                }
                 if SCROLL_MODE.load(Ordering::Relaxed) {
-                    carry_wheel += -(r.dy as i32);
+                    carry_wheel += -sy;
                 } else {
-                    carry_x += r.dx as i32;
-                    carry_y += r.dy as i32;
+                    carry_x += sx;
+                    carry_y += sy;
                 }
                 let wheel = (carry_wheel / SCROLL_DIV).clamp(-127, 127);
                 carry_wheel -= wheel * SCROLL_DIV;
