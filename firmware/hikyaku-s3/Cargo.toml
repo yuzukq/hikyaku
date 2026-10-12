@@ -20,6 +20,11 @@ trackpad-still-filter = ["trackpad"]
 # パッド側のタップを切り、ソフト側でタップを判定する（hikyaku_pointer::relative::SoftTap）。スワイプ中の誤クリック対策。
 # 指を離した合図に ZIdle = 5（QMK と同じ）を使う。既定は無効（パッド側のタップ）。
 trackpad-soft-tap = ["trackpad"]
+# タッチ感度（ADC 減衰）。既定は 4X（いちばん鈍い。QMK の平らなオーバーレイの既定）。軽いタッチへの反応を上げる候補。
+# 1 つだけ付ける（複数付けるとコンパイルエラー）。
+trackpad-sens-1x = ["trackpad"]
+trackpad-sens-2x = ["trackpad"]
+trackpad-sens-3x = ["trackpad"]
 # 起動時に SPI の読み書きの総当たりテスト（モード × 周波数 × CS 待ち）を行い、結果をログに出す。
 trackpad-selftest = ["trackpad"]
 # 旧方式: 絶対座標から移動量を自前で作る（既定は相対モード）。

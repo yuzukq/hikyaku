@@ -274,6 +274,28 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
     info!("selftest: done");
 }
 
+/// タッチ感度（ADC 減衰）。既定は 4X（いちばん鈍い）。`trackpad-sens-1x` / `-2x` / `-3x` で変える（1X がいちばん敏感）。
+/// 変えるとキャリブレーションが走る（起動中はパッドに触れないこと）。
+#[cfg(all(
+    not(feature = "trackpad-absolute"),
+    any(
+        all(feature = "trackpad-sens-1x", feature = "trackpad-sens-2x"),
+        all(feature = "trackpad-sens-1x", feature = "trackpad-sens-3x"),
+        all(feature = "trackpad-sens-2x", feature = "trackpad-sens-3x"),
+    )
+))]
+compile_error!("trackpad-sens-1x / -2x / -3x のうち 1 つだけを指定してください");
+#[cfg(not(feature = "trackpad-absolute"))]
+const SENSITIVITY: Attenuation = if cfg!(feature = "trackpad-sens-1x") {
+    Attenuation::X1
+} else if cfg!(feature = "trackpad-sens-2x") {
+    Attenuation::X2
+} else if cfg!(feature = "trackpad-sens-3x") {
+    Attenuation::X3
+} else {
+    Attenuation::X4
+};
+
 /// 相対モードの設定（タップ有効、感度 4X、ZIdle 0）。
 /// **パッド側の反転（invert_x/invert_y）は使わない。** データシートでは絶対座標モード用で、実機（2026-10-13）では
 /// Y 反転を入れると相対モードの Y の移動量がほとんど出なくなった。向きはソフト側（`SWAP_XY`・`SCREEN_*_INVERT`）で合わせる。
@@ -281,7 +303,7 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
 /// `trackpad-soft-tap` のときはパッド側のタップを切り、指を離した合図（ゼロパケット）のために ZIdle = 5 にする。
 #[cfg(not(feature = "trackpad-absolute"))]
 const REL_OPTIONS: RelativeOptions = RelativeOptions {
-    sensitivity: Attenuation::X4,
+    sensitivity: SENSITIVITY,
     primary_tap: !cfg!(feature = "trackpad-soft-tap"),
     invert_x: false,
     invert_y: false,
