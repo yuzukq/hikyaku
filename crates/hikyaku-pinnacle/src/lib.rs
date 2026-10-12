@@ -168,11 +168,18 @@ pub struct Info {
 
 pub struct Pinnacle<SPI> {
     spi: SPI,
+    /// CS を落としてから最初のクロックまでの待ち（ns）。0 なら待たない。
+    cs_setup_ns: u32,
 }
 
 impl<SPI: SpiDevice> Pinnacle<SPI> {
     pub fn new(spi: SPI) -> Self {
-        Self { spi }
+        Self { spi, cs_setup_ns: 0 }
+    }
+
+    /// CS を落としてから最初のクロックまでの待ち（ns）を設定する（SPI の物理層の調整用）。
+    pub fn set_cs_setup_ns(&mut self, ns: u32) {
+        self.cs_setup_ns = ns;
     }
 
     pub fn release(self) -> SPI {
@@ -185,9 +192,14 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
     }
 
     pub fn write_reg(&mut self, addr: u8, value: u8) -> Result<(), Error<SPI::Error>> {
-        self.spi
-            .write(&[WRITE | (addr & 0x1F), value])
-            .map_err(Error::Spi)
+        let buf = [WRITE | (addr & 0x1F), value];
+        if self.cs_setup_ns > 0 {
+            self.spi
+                .transaction(&mut [Operation::DelayNs(self.cs_setup_ns), Operation::Write(&buf)])
+                .map_err(Error::Spi)
+        } else {
+            self.spi.write(&buf).map_err(Error::Spi)
+        }
     }
 
     pub fn read_regs(&mut self, addr: u8, out: &mut [u8]) -> Result<(), Error<SPI::Error>> {
@@ -198,9 +210,15 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
         let mut tx = [FILLER; 3 + MAX_READ];
         tx[0] = READ | (addr & 0x1F);
         let mut rx = [0u8; 3 + MAX_READ];
-        self.spi
-            .transaction(&mut [Operation::Transfer(&mut rx[..n], &tx[..n])])
-            .map_err(Error::Spi)?;
+        if self.cs_setup_ns > 0 {
+            self.spi
+                .transaction(&mut [Operation::DelayNs(self.cs_setup_ns), Operation::Transfer(&mut rx[..n], &tx[..n])])
+                .map_err(Error::Spi)?;
+        } else {
+            self.spi
+                .transaction(&mut [Operation::Transfer(&mut rx[..n], &tx[..n])])
+                .map_err(Error::Spi)?;
+        }
         out.copy_from_slice(&rx[3..n]);
         Ok(())
     }
@@ -497,6 +515,7 @@ mod tests {
                             rx[i] = self.regs[a + i - 3];
                         }
                     }
+                    Operation::DelayNs(_) => {}
                     _ => panic!("unexpected op"),
                 }
             }
