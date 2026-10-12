@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration, Instant, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
+    delay::Delay,
     gpio::{Input, Output},
     spi::master::Spi,
     Blocking,
@@ -17,8 +18,10 @@ use esp_hal::{
     spi::{master::Config as SpiConfig, Mode},
     time::Rate,
 };
-use hikyaku_pinnacle::Pinnacle;
-use hikyaku_pointer::{tracker::LowByteTracker, Config, Pointer};
+use hikyaku_pinnacle::{Attenuation, Pinnacle};
+#[cfg(feature = "trackpad-lowbyte")]
+use hikyaku_pointer::tracker::LowByteTracker;
+use hikyaku_pointer::{Config, Pointer};
 use log::{info, warn};
 
 use crate::{Report, REPORTS};
@@ -42,7 +45,9 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
         }
     };
     let mut pad = Pinnacle::new(dev);
-    match pad.init() {
+    // 起動時はキャリブレーションが走る。パッドに触れないこと（補正が狂う）。
+    // ADC 減衰は QMK の既定（平らなオーバーレイで 4X）。オーバーレイの厚みに合わせて調整する。
+    match pad.init(&mut Delay::new(), Attenuation::X4) {
         // 参考実装では ID=0x07, Version=0x3A。違っていても動くことはあるので警告に留める。
         Ok(i) => info!("trackpad: firmware id={:#04x} version={:#04x}", i.firmware_id, i.firmware_version),
         Err(_) => {
@@ -51,14 +56,20 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
         }
     }
 
-    // 位置は下位バイトの前後差から作る（上位ビットは更新が遅れて信頼できない。tracker.rs 参照）。
-    // 追いかけた位置は u16 の中央付近になるので、クリップ範囲を外す。
+    // 既定は QMK と同じく、報告された絶対座標をそのまま使う。
+    // `trackpad-lowbyte` のときは、下位バイトの前後差から位置を作る（tracker.rs。追いかけた位置は u16 の中央付近なので、
+    // クリップ範囲を外す）。
+    #[allow(unused_mut)]
     let mut cfg = Config::default();
-    cfg.x_min = 0;
-    cfg.x_max = u16::MAX;
-    cfg.y_min = 0;
-    cfg.y_max = u16::MAX;
+    #[cfg(feature = "trackpad-lowbyte")]
+    {
+        cfg.x_min = 0;
+        cfg.x_max = u16::MAX;
+        cfg.y_min = 0;
+        cfg.y_max = u16::MAX;
+    }
     let mut pointer = Pointer::new(cfg);
+    #[cfg(feature = "trackpad-lowbyte")]
     let mut tracker = LowByteTracker::new();
     let mut touch: Option<(u16, u16)> = None;
 
@@ -71,6 +82,8 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
     let mut read_errors = 0u32;
     let mut disagreed = 0u32;
     // 下位バイトの bit7（128 の位）が立っていたサンプル数。正しく読めていれば、触っている間はおよそ半分のサンプルで立つ。
+    let mut torn = 0u32;
+    let mut prev_pkt: Option<([u8; 6], u16, u16)> = None;
     let mut msb_x = 0u32;
     let mut msb_y = 0u32;
     let mut khz = 0u32;
@@ -109,6 +122,21 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
                 if c.disagreed {
                     disagreed += 1;
                 }
+                // 座標の上位ビットが下位バイトより遅れて更新される現象の検出。下位バイトの前後差（256 を法とする）と、
+                // 報告された座標の差が大きくずれたら「ずれ」と数える。キャリブレーション後は 0 になるはず。
+                if c.data.touching() {
+                    if let Some((pr, px, py)) = prev_pkt {
+                        let sd = |a: u8, b: u8| (b.wrapping_sub(a) as i8) as i32;
+                        let (sdx, sdy) = (sd(pr[2], c.raw[2]), sd(pr[3], c.raw[3]));
+                        let (rdx, rdy) = (d.x as i32 - px as i32, d.y as i32 - py as i32);
+                        if (sdx.abs() < 60 && (rdx - sdx).abs() > 100) || (sdy.abs() < 60 && (rdy - sdy).abs() > 100) {
+                            torn += 1;
+                        }
+                    }
+                    prev_pkt = Some((c.raw, d.x, d.y));
+                } else {
+                    prev_pkt = None;
+                }
                 if c.data.touching() {
                     // 生パケットの X 下位バイト(2)・Y 下位バイト(3)
                     if c.raw[2] & 0x80 != 0 {
@@ -126,8 +154,13 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
                     touch_packets += 1;
                 }
                 touch = if d.touching() {
-                    Some(tracker.update(c.raw[2], c.raw[3]))
+                    #[cfg(feature = "trackpad-lowbyte")]
+                    let pos = tracker.update(c.raw[2], c.raw[3]);
+                    #[cfg(not(feature = "trackpad-lowbyte"))]
+                    let pos = (d.x, d.y);
+                    Some(pos)
                 } else {
+                    #[cfg(feature = "trackpad-lowbyte")]
                     tracker.reset();
                     None
                 };
@@ -150,8 +183,8 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
             if packets > 0 || reports > 0 || dr_high > 0 || read_errors > 0 {
                 let status1 = pad.read_reg(hikyaku_pinnacle::reg::STATUS1).ok();
                 info!(
-                    "trackpad: khz={} polls={} packets={} touching={} msb_x={} msb_y={} reports={} errors={} disagreed={} status1={:?} last(x,y,z)={:?}",
-                    khz, polls, packets, touch_packets, msb_x, msb_y, reports, read_errors, disagreed, status1, last_raw
+                    "trackpad: khz={} packets={} touching={} torn={} reports={} errors={} disagreed={} status1={:?} last(x,y,z)={:?}",
+                    khz, packets, touch_packets, torn, reports, read_errors, disagreed, status1, last_raw
                 );
             }
             polls = 0;
@@ -163,6 +196,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
             disagreed = 0;
             msb_x = 0;
             msb_y = 0;
+            torn = 0;
             last_log = Instant::now();
         }
         // Pinnacle のサンプルレートは約 100Hz。それに合わせる。

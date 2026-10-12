@@ -14,7 +14,10 @@
 
 #![cfg_attr(not(test), no_std)]
 
-use embedded_hal::spi::{Operation, SpiDevice};
+use embedded_hal::{
+    delay::DelayNs,
+    spi::{Operation, SpiDevice},
+};
 
 /// レジスタアドレス。
 pub mod reg {
@@ -24,7 +27,13 @@ pub mod reg {
     pub const SYS_CONFIG1: u8 = 0x03;
     pub const FEED_CONFIG1: u8 = 0x04;
     pub const FEED_CONFIG2: u8 = 0x05;
+    pub const CAL_CONFIG1: u8 = 0x07;
     pub const Z_IDLE: u8 = 0x0A;
+    /// ERA（拡張レジスタ）アクセス用: 値 / アドレス上位 / アドレス下位 / 制御
+    pub const ERA_VALUE: u8 = 0x1B;
+    pub const ERA_ADDR_HIGH: u8 = 0x1C;
+    pub const ERA_ADDR_LOW: u8 = 0x1D;
+    pub const ERA_CTRL: u8 = 0x1E;
     /// 絶対座標パケットの先頭（0x12〜0x17 の 6 バイト）。
     pub const PACKET_BYTE_0: u8 = 0x12;
 }
@@ -41,12 +50,31 @@ const WRITE: u8 = 0x80;
 const READ: u8 = 0xA0;
 const FILLER: u8 = 0xFC;
 
+/// SysConfig1: リセット
+const SYS_RESET: u8 = 0x01;
+/// CalConfig1: キャリブレーション開始（完了するとビットが落ちる）
+const CAL_START: u8 = 0x01;
+/// ERA 制御
+const ERA_READ: u8 = 0x01;
+const ERA_WRITE: u8 = 0x02;
+const ERA_INC_READ: u8 = 0x04;
+/// ERA: ADC 設定（上位 2 ビットが ADC の減衰）
+const ERA_ADC_CONFIG: u16 = 0x0187;
+const ADC_ATTENUATE_MASK: u8 = 0xC0;
+
+/// ADC の減衰（オーバーレイの厚みに合わせる）。QMK の既定は、平らなオーバーレイで 4X、曲面で 2X。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Attenuation {
+    X1 = 0x00,
+    X2 = 0x40,
+    X3 = 0x80,
+    X4 = 0xC0,
+}
+
 /// FeedConfig1: Feed Enable
 const FEED_ENABLE: u8 = 1 << 0;
 /// FeedConfig1: 絶対座標モード
 const FEED_ABSOLUTE: u8 = 1 << 1;
-/// FeedConfig2: 全タップ・二次タップ・スクロール・GlideExtend を無効（ソフトウェアで処理する）
-const FEED2_DISABLE_ALL_GESTURES: u8 = 0x1E;
 /// 指を離した後に送る「空」パケットの数
 const Z_IDLE_COUNT: u8 = 5;
 
@@ -160,19 +188,108 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
         self.write_reg(reg::STATUS1, 0x00)
     }
 
-    /// 初期化して絶対座標モードで動かす。ID とバージョンを返す（検証は呼び出し側で）。
-    pub fn init(&mut self) -> Result<Info, Error<SPI::Error>> {
+    /// 初期化して絶対座標モードで動かす（QMK の `cirque_pinnacle_init` と同じ手順）。ID とバージョンを返す。
+    ///
+    /// リセット → 30ms 待つ → 設定 → ADC 減衰（ERA）→ キャリブレーション → Feed 有効化。
+    /// 実機で、リセット・ADC 減衰・キャリブレーションを省くと、座標の上位ビットの更新が遅れてカーソルが飛んだため。
+    /// **起動時（キャリブレーション中）はパッドに触れないこと**（補正が狂う）。
+    pub fn init<D: DelayNs>(&mut self, delay: &mut D, attenuation: Attenuation) -> Result<Info, Error<SPI::Error>> {
         let firmware_id = self.read_reg(reg::FIRMWARE_ID)?;
         let firmware_version = self.read_reg(reg::FIRMWARE_VERSION)?;
-        self.clear_flags()?;
-        self.write_reg(reg::SYS_CONFIG1, 0x00)?; // シャットダウン/スリープを解除
-        self.write_reg(reg::FEED_CONFIG2, FEED2_DISABLE_ALL_GESTURES)?;
+
+        // 念のためリセット（電源を入れ直さずにマイコンだけ再起動した場合のため）。起動に 10〜15ms かかる。
+        self.write_reg(reg::SYS_CONFIG1, SYS_RESET)?;
+        delay.delay_ms(30);
+        self.write_reg(reg::SYS_CONFIG1, 0x00)?;
+        delay.delay_us(50);
+        self.clear_flags_wait(delay)?;
+
+        // 絶対座標モードでは FeedConfig2 は既定値（0）。データ形式は絶対座標。Feed はまだ有効にしない。
+        self.write_reg(reg::FEED_CONFIG2, 0x00)?;
+        self.write_reg(reg::FEED_CONFIG1, FEED_ABSOLUTE)?;
         self.write_reg(reg::Z_IDLE, Z_IDLE_COUNT)?;
-        self.write_reg(reg::FEED_CONFIG1, FEED_ENABLE | FEED_ABSOLUTE)?;
-        // 設定中に立った SW_CC（コマンド完了）などをクリアする。クリアしないと DR ピンが High のまま張り付き、
-        // Pinnacle は新しい座標を出さない。
-        self.clear_flags()?;
+
+        // ADC の減衰を設定し、変えたらキャリブレーションする。
+        if self.set_adc_attenuation(delay, attenuation)? {
+            self.calibrate(delay)?;
+        }
+
+        self.enable_feed(true)?;
         Ok(Info { firmware_id, firmware_version })
+    }
+
+    /// フラグをクリアして、50µs 待つ（QMK と同じ）。
+    pub fn clear_flags_wait<D: DelayNs>(&mut self, delay: &mut D) -> Result<(), Error<SPI::Error>> {
+        self.clear_flags()?;
+        delay.delay_us(50);
+        Ok(())
+    }
+
+    pub fn enable_feed(&mut self, enable: bool) -> Result<(), Error<SPI::Error>> {
+        let mut v = self.read_reg(reg::FEED_CONFIG1)?;
+        if enable {
+            v |= FEED_ENABLE;
+        } else {
+            v &= !FEED_ENABLE;
+        }
+        self.write_reg(reg::FEED_CONFIG1, v)
+    }
+
+    /// 拡張レジスタ（ERA）を読む。Feed を止めてから行う。
+    pub fn era_read<D: DelayNs>(&mut self, delay: &mut D, addr: u16) -> Result<u8, Error<SPI::Error>> {
+        self.enable_feed(false)?;
+        self.write_reg(reg::ERA_ADDR_HIGH, (addr >> 8) as u8)?;
+        self.write_reg(reg::ERA_ADDR_LOW, addr as u8)?;
+        self.write_reg(reg::ERA_CTRL, ERA_INC_READ | ERA_READ)?;
+        self.wait_era_done(delay)?;
+        let v = self.read_reg(reg::ERA_VALUE)?;
+        self.clear_flags_wait(delay)?;
+        Ok(v)
+    }
+
+    /// 拡張レジスタ（ERA）に書く。
+    pub fn era_write<D: DelayNs>(&mut self, delay: &mut D, addr: u16, value: u8) -> Result<(), Error<SPI::Error>> {
+        self.enable_feed(false)?;
+        self.write_reg(reg::ERA_VALUE, value)?;
+        self.write_reg(reg::ERA_ADDR_HIGH, (addr >> 8) as u8)?;
+        self.write_reg(reg::ERA_ADDR_LOW, addr as u8)?;
+        self.write_reg(reg::ERA_CTRL, ERA_WRITE)?;
+        self.wait_era_done(delay)?;
+        self.clear_flags_wait(delay)
+    }
+
+    /// ERA 制御レジスタが 0 に戻るのを待つ（最大 20ms）。
+    fn wait_era_done<D: DelayNs>(&mut self, delay: &mut D) -> Result<(), Error<SPI::Error>> {
+        for _ in 0..200 {
+            if self.read_reg(reg::ERA_CTRL)? == 0 {
+                return Ok(());
+            }
+            delay.delay_us(100);
+        }
+        Ok(())
+    }
+
+    /// ADC の減衰を設定する。変更した（キャリブレーションが必要）なら true。
+    pub fn set_adc_attenuation<D: DelayNs>(&mut self, delay: &mut D, a: Attenuation) -> Result<bool, Error<SPI::Error>> {
+        let cur = self.era_read(delay, ERA_ADC_CONFIG)?;
+        if cur & ADC_ATTENUATE_MASK == a as u8 {
+            return Ok(false);
+        }
+        self.era_write(delay, ERA_ADC_CONFIG, (cur & !ADC_ATTENUATE_MASK) | a as u8)?;
+        Ok(true)
+    }
+
+    /// キャリブレーションする（約 100ms。最大 200ms 待つ）。
+    pub fn calibrate<D: DelayNs>(&mut self, delay: &mut D) -> Result<(), Error<SPI::Error>> {
+        let v = self.read_reg(reg::CAL_CONFIG1)?;
+        self.write_reg(reg::CAL_CONFIG1, v | CAL_START)?;
+        for _ in 0..200 {
+            if self.read_reg(reg::CAL_CONFIG1)? & CAL_START == 0 {
+                break;
+            }
+            delay.delay_ms(1);
+        }
+        self.clear_flags_wait(delay)
     }
 
     /// 新しいサンプルがあれば読んで返す。
@@ -240,12 +357,40 @@ mod tests {
         regs: [u8; 32],
         /// 受信した書き込みの記録 (addr, value)
         writes: std::vec::Vec<(u8, u8)>,
+        /// 拡張レジスタ（ERA）の中身（アドレス 0x0000〜0x01FF）
+        era: [u8; 0x200],
+        calibrations: u32,
     }
 
     impl Mock {
         fn new() -> Self {
-            Self { regs: [0; 32], writes: std::vec::Vec::new() }
+            let mut era = [0u8; 0x200];
+            era[0x0187] = 0x4E; // ADC 設定の既定値（減衰 2X）
+            Self { regs: [0; 32], writes: std::vec::Vec::new(), era, calibrations: 0 }
         }
+
+        /// 書き込みに対するパッド側の動作（ERA の読み書き、キャリブレーション完了）。
+        fn on_write(&mut self, addr: u8, value: u8) {
+            if addr == reg::ERA_CTRL {
+                let a = ((self.regs[reg::ERA_ADDR_HIGH as usize] as usize) << 8) | self.regs[reg::ERA_ADDR_LOW as usize] as usize;
+                if value & ERA_WRITE != 0 {
+                    self.era[a] = self.regs[reg::ERA_VALUE as usize];
+                }
+                if value & ERA_READ != 0 {
+                    self.regs[reg::ERA_VALUE as usize] = self.era[a];
+                }
+                self.regs[reg::ERA_CTRL as usize] = 0; // 完了
+            }
+            if addr == reg::CAL_CONFIG1 && value & CAL_START != 0 {
+                self.regs[reg::CAL_CONFIG1 as usize] &= !CAL_START; // すぐ完了
+                self.calibrations += 1;
+            }
+        }
+    }
+
+    struct NoDelay;
+    impl DelayNs for NoDelay {
+        fn delay_ns(&mut self, _ns: u32) {}
     }
 
     impl ErrorType for Mock {
@@ -262,6 +407,7 @@ mod tests {
                         let a = w[0] & 0x1F;
                         self.regs[a as usize] = w[1];
                         self.writes.push((a, w[1]));
+                        self.on_write(a, w[1]);
                     }
                     Operation::Transfer(rx, tx) => {
                         assert_eq!(tx[0] & 0xE0, 0xA0, "read command");
@@ -335,21 +481,46 @@ mod tests {
     }
 
     #[test]
-    fn init_configures_absolute_mode() {
+    fn init_follows_the_qmk_sequence() {
         let mut m = Mock::new();
         m.regs[0] = 0x07;
         m.regs[1] = 0x3A;
         let mut p = Pinnacle::new(m);
-        let info = p.init().unwrap();
+        let info = p.init(&mut NoDelay, Attenuation::X4).unwrap();
         assert_eq!(info, Info { firmware_id: 0x07, firmware_version: 0x3A });
         let m = p.release();
-        assert_eq!(m.regs[reg::FEED_CONFIG1 as usize], 0x03);
-        assert_eq!(m.regs[reg::FEED_CONFIG2 as usize], 0x1E);
+        // リセットを送ってから既定に戻している
+        let pos_reset = m.writes.iter().position(|&w| w == (reg::SYS_CONFIG1, SYS_RESET)).expect("reset");
+        assert_eq!(m.writes[pos_reset + 1], (reg::SYS_CONFIG1, 0x00));
+        // 絶対座標モード、FeedConfig2 は既定値、ZIdle=5
+        assert_eq!(m.regs[reg::FEED_CONFIG2 as usize], 0x00);
         assert_eq!(m.regs[reg::Z_IDLE as usize], 5);
-        assert_eq!(m.regs[reg::SYS_CONFIG1 as usize], 0x00);
-        // Feed を有効にした後、最後にフラグをクリアする（SW_CC が残ると Pinnacle が止まる）
-        assert_eq!(m.writes.last(), Some(&(reg::STATUS1, 0x00)));
-        assert_eq!(m.writes[m.writes.len() - 2], (reg::FEED_CONFIG1, 0x03));
+        // ADC の減衰が 4X（0xC0）になり、他のビット（0x4E の下位）は保たれる
+        assert_eq!(m.era[0x0187], 0xCE);
+        // 減衰を変えたのでキャリブレーションした
+        assert_eq!(m.calibrations, 1);
+        // 最後は Feed 有効（絶対モードのまま）
+        assert_eq!(m.regs[reg::FEED_CONFIG1 as usize], FEED_ENABLE | FEED_ABSOLUTE);
+        let feed_on = m.writes.iter().rposition(|&w| w == (reg::FEED_CONFIG1, FEED_ENABLE | FEED_ABSOLUTE)).unwrap();
+        let cal = m.writes.iter().position(|&w| w.0 == reg::CAL_CONFIG1).unwrap();
+        assert!(feed_on > cal, "feed is enabled after calibration");
+    }
+
+    #[test]
+    fn init_skips_calibration_when_attenuation_already_matches() {
+        let mut m = Mock::new();
+        m.era[0x0187] = 0xCE; // すでに 4X
+        let mut p = Pinnacle::new(m);
+        p.init(&mut NoDelay, Attenuation::X4).unwrap();
+        assert_eq!(p.release().calibrations, 0);
+    }
+
+    #[test]
+    fn era_write_and_read_round_trip() {
+        let mut p = Pinnacle::new(Mock::new());
+        p.era_write(&mut NoDelay, 0x0149, 0x04).unwrap();
+        assert_eq!(p.era_read(&mut NoDelay, 0x0149).unwrap(), 0x04);
+        assert_eq!(p.era_read(&mut NoDelay, 0x0187).unwrap(), 0x4E);
     }
 
     #[test]
