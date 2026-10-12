@@ -296,9 +296,9 @@ const SCREEN_X_INVERT: bool = true;
 const SCREEN_Y_INVERT: bool = true;
 
 /// 移動量の倍率。パッドの相対モードの単位は粗く（31mm のパッドを端から端までなぞって 150〜200 程度）、1:1 では画面上の移動が
-/// 小さすぎる。QMK の相対モードの既定（`scale 1024 / 256` = 4 倍）に合わせる。速すぎる・遅すぎるときはここを変える。
+/// 小さすぎる。QMK の相対モードの既定は 4 倍（`scale 1024 / 256`）だが、実機で速すぎたので 2 倍（2026-10-13）。
 #[cfg(not(feature = "trackpad-absolute"))]
-const REL_GAIN: i32 = 4;
+const REL_GAIN: i32 = 2;
 
 /// スクロールモードで、ホイール 1 目盛りに相当する移動量。
 #[cfg(not(feature = "trackpad-absolute"))]
