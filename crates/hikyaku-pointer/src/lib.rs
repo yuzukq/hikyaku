@@ -13,6 +13,8 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod tracker;
+
 /// マウスレポート（BLE HID の ID2 と同じ並び）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseReport {
@@ -93,7 +95,8 @@ impl Default for Config {
             smoothing_q8: 256,
             smooth_min_q8: 80,
             smooth_full_speed: 24,
-            median3: true,
+            // 下位バイトの前後差で位置を作るようにしたので（tracker.rs）、とげはもう出ない。遅れを避けるため既定は無効。
+            median3: false,
             start_threshold: 10,
             axis_damp_ratio: 3,
             axis_damp_q8: 64,

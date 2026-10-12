@@ -14,6 +14,8 @@ selftest = []
 trackpad = ["dep:hikyaku-pinnacle", "dep:hikyaku-pointer", "dep:embedded-hal-bus"]
 # 生データ（tp <ms> <x> <y> <z>）をログに出す。tools の replay で再生して調整する。
 trackpad-trace = ["trackpad"]
+# 調査用: SPI の周波数を 8 秒ごとに切り替えて、読み取りの品質を周波数ごとに調べる。
+trackpad-sweep = ["trackpad-trace"]
 
 [dependencies]
 esp-hal = { version = "~1.2.2", features = ["esp32s3", "log-04", "unstable"] }

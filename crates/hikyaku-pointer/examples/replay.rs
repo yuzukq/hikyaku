@@ -8,13 +8,14 @@
 //! 入力: `tp <ms> <x> <y> <z>` を含む行（他の行は無視）。z=0 は指が離れている。
 //! 出力: 出したレポートの一覧と、移動量の合計・ジャンプ・タップ数などの集計。
 
-use hikyaku_pointer::{Config, Pointer};
+use hikyaku_pointer::{tracker::LowByteTracker, Config, Pointer};
 use std::{env, fs};
 
 fn main() {
     let mut args = env::args().skip(1);
     let path = args.next().expect("trace file");
     let mut cfg = Config::default();
+    let mut lowbyte = false;
     for kv in args {
         let (k, v) = kv.split_once('=').expect("key=value");
         let n: i64 = v.parse().expect("number");
@@ -31,6 +32,7 @@ fn main() {
             "tap_ms" => cfg.tap_max_ms = n as u32,
             "tap_move" => cfg.tap_max_move = n as i32,
             "median" => cfg.median3 = n != 0,
+            "lowbyte" => lowbyte = n != 0,
             "invert_y" => cfg.invert_y = n != 0,
             "invert_x" => cfg.invert_x = n != 0,
             _ => panic!("unknown key {k}"),
@@ -41,6 +43,15 @@ fn main() {
     let (mut sx, mut sy, mut n, mut clicks) = (0i64, 0i64, 0usize, 0usize);
     let (mut max_step, mut samples, mut touches) = (0i32, 0usize, 0usize);
     let mut was_touch = false;
+    let mut tracker = LowByteTracker::new();
+    if lowbyte {
+        // 追いかけた位置は u16 の中央（32768）付近なので、クリップを外す。
+        cfg.x_min = 0;
+        cfg.x_max = u16::MAX;
+        cfg.y_min = 0;
+        cfg.y_max = u16::MAX;
+        p = Pointer::new(cfg);
+    }
     let mut prev_buttons = 0u8;
     for line in text.lines() {
         let Some(i) = line.find("tp ") else { continue };
@@ -54,6 +65,23 @@ fn main() {
         };
         samples += 1;
         let touching = z > 0;
+        // `raw=[00, 20, 6b, ...]` があれば、X・Y 下位バイト（2・3 番目）を取り出す。
+        let raw: Option<Vec<u8>> = line.split("raw=[").nth(1).map(|r| {
+            r.trim_end_matches(']').split(',').filter_map(|b| u8::from_str_radix(b.trim(), 16).ok()).collect()
+        });
+        let (mut x, mut y) = (x, y);
+        if lowbyte {
+            if let Some(r) = raw.as_ref().filter(|r| r.len() >= 4) {
+                if touching {
+                    if !was_touch {
+                        tracker.reset();
+                    }
+                    (x, y) = tracker.update(r[2], r[3]);
+                } else {
+                    tracker.reset();
+                }
+            }
+        }
         if touching && !was_touch {
             touches += 1;
         }

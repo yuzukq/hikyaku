@@ -9,23 +9,24 @@ use embassy_time::{Duration, Instant, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
     gpio::{Input, Output},
-    spi::{
-        master::{Config as SpiConfig, Spi},
-        Mode,
-    },
-    time::Rate,
+    spi::master::Spi,
     Blocking,
 };
+#[cfg(feature = "trackpad-sweep")]
+use esp_hal::{
+    spi::{master::Config as SpiConfig, Mode},
+    time::Rate,
+};
 use hikyaku_pinnacle::Pinnacle;
-use hikyaku_pointer::{Config, Pointer};
+use hikyaku_pointer::{tracker::LowByteTracker, Config, Pointer};
 use log::{info, warn};
 
 use crate::{Report, REPORTS};
 
 /// 調査用（`trackpad-trace`）: SPI の周波数を一定時間ごとに切り替えて、MSB が正しく読めているかを周波数ごとに調べる。
-#[cfg(feature = "trackpad-trace")]
+#[cfg(feature = "trackpad-sweep")]
 const SWEEP_KHZ: [u32; 6] = [4000, 2000, 1000, 500, 250, 8000];
-#[cfg(feature = "trackpad-trace")]
+#[cfg(feature = "trackpad-sweep")]
 const SWEEP_SECS: u64 = 8;
 
 /// true の間、トラックパッドの動きをスクロールに変換する（キー押下中など。今は常に false）。
@@ -50,7 +51,15 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
         }
     }
 
-    let mut pointer = Pointer::new(Config::default());
+    // 位置は下位バイトの前後差から作る（上位ビットは更新が遅れて信頼できない。tracker.rs 参照）。
+    // 追いかけた位置は u16 の中央付近になるので、クリップ範囲を外す。
+    let mut cfg = Config::default();
+    cfg.x_min = 0;
+    cfg.x_max = u16::MAX;
+    cfg.y_min = 0;
+    cfg.y_max = u16::MAX;
+    let mut pointer = Pointer::new(cfg);
+    let mut tracker = LowByteTracker::new();
     let mut touch: Option<(u16, u16)> = None;
 
     // 診断用の集計（1 秒ごとにログへ）。実機でカーソルが動かないときの切り分け用。
@@ -65,19 +74,19 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
     let mut msb_x = 0u32;
     let mut msb_y = 0u32;
     let mut khz = 0u32;
-    #[cfg(feature = "trackpad-trace")]
+    #[cfg(feature = "trackpad-sweep")]
     let mut sweep_idx = 0usize;
     // 起動直後は経過時間が短く、`Instant::now() - Duration` はアンダーフローしてパニックする。引き算はしない。
-    #[cfg(feature = "trackpad-trace")]
+    #[cfg(feature = "trackpad-sweep")]
     let mut last_switch = Instant::now();
-    #[cfg(feature = "trackpad-trace")]
+    #[cfg(feature = "trackpad-sweep")]
     let mut first_switch = true;
     let mut last_log = Instant::now();
     let mut last_raw = (0u16, 0u16, 0u8);
     let mut was_touching = false;
 
     loop {
-        #[cfg(feature = "trackpad-trace")]
+        #[cfg(feature = "trackpad-sweep")]
         if first_switch || last_switch.elapsed() >= Duration::from_secs(SWEEP_SECS) {
             first_switch = false;
             khz = SWEEP_KHZ[sweep_idx % SWEEP_KHZ.len()];
@@ -116,7 +125,12 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
                 if d.touching() {
                     touch_packets += 1;
                 }
-                touch = d.touching().then_some((d.x, d.y));
+                touch = if d.touching() {
+                    Some(tracker.update(c.raw[2], c.raw[3]))
+                } else {
+                    tracker.reset();
+                    None
+                };
                 if d.touching() != was_touching {
                     info!("trackpad: {} x={} y={} z={}", if d.touching() { "touch" } else { "release" }, d.x, d.y, d.z);
                     was_touching = d.touching();
