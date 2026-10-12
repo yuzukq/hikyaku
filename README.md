@@ -16,8 +16,7 @@
 | マイコン | ESP32-S3 ボード（USB-C 1 ポート。ESP32-S3FH4R2 搭載。AliExpress 品） | USB OTG でホストになれる + BLE。1チップで完結 |
 | トラックパッド | Cirque Pinnacle TM035035（SPI 版） | 35mm 円形。J1 は 12 ピン 0.5mm FFC |
 | USB 接続 | USB-C ⇔ USB-C ケーブル | ESP32-S3 ボードの USB-C をホストポートとして使う |
-| 電源 | モバイルバッテリー（Type-C）+ 秋月 Type-C DIP 化キット（CC に 5.1kΩ ×2） | S3 の 5V ピンへ給電。キーボードにも供給される |
-| ログ | 秋月 AE-CH9102F-TYPEC-BO | ホスト動作中は USB シリアルが使えないため UART で取る |
+| 電源・ログ | 秋月 AE-CH9102F-TYPEC-BO（USB-シリアル変換） | USB-C にモバイルバッテリー（または PC）をつなぎ、+5V を S3 の 5V ピンへ（キーボードにも届く）。ログの取り出し口も兼ねる |
 
 部品の詳細と手持ちの状況は [docs/hardware/parts.md](docs/hardware/parts.md)。
 

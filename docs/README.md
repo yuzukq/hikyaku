@@ -3,6 +3,7 @@
 | 文書 | 内容 |
 |---|---|
 | [hardware/parts.md](hardware/parts.md) | 部品表と手持ちの状況 |
+| [hardware/assembly.md](hardware/assembly.md) | **組み立て（ユニバーサル基板・完成形の配線）** |
 | [hardware/wiring.md](hardware/wiring.md) | 配線（開発中の構成 / 最終形 / S3 ピン割り当て） |
 | [hardware/power.md](hardware/power.md) | 電源（Type-C DIP 化キット・CC 抵抗・モバイルバッテリー） |
 | [hardware/usb-serial-ch9102f.md](hardware/usb-serial-ch9102f.md) | USB-シリアル変換（ログ用）の使い方 |

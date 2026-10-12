@@ -68,10 +68,13 @@ S3 は起動して 3 秒後に USB ホストになり、USB シリアル/JTAG（
 3. `espflash flash ...`（[../firmware.md](../firmware.md)）
 4. 抜いて、キーボードと給電を元に戻す
 
-## 最終形（予定）
+## 最終形
+
+**組み立て（ユニバーサル基板）の完成形の配線は [assembly.md](assembly.md)。**
 
 ```
-モバイルバッテリー ─ Type-C DIP 化キット(+CC 5.1kΩ×2) ─▶ S3 5V/GND ─ 7skb
+モバイルバッテリー or PC ─(USB-C)─ CH9102F ─ +5V/GND ─▶ S3 5V/GND ─(USB-C)─ 7skb
+                                           └ RxD ◀── S3 TX(GPIO43)（ログ）
 トラックパッド TM035035 ─ SPI ─ S3（SCK=12, MISO=13, MOSI=11, SS=10, DR=9, 3V3, GND）
 S3 ──BLE──▶ Mac
 ```
