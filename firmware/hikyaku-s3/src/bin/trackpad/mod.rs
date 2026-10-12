@@ -4,7 +4,8 @@
 //! `trackpad-absolute` を付けると、絶対座標から移動量を自前で作る旧方式になる。
 //!
 //! 配線（docs/hardware/wiring.md）: SCK=GPIO12 / MISO=GPIO13 / MOSI=GPIO11 / SS=GPIO10 / DR=GPIO9（SPI2 の標準ピン + DR）。
-//! SPI モード 1、**4MHz**（Cirque 公式サンプルは 10MHz、2・4MHz で読み戻しテスト 0 エラー）。このパッドは SPI のクロックが低い（1MHz 以下）と MSB を取り違える。
+//! SPI モード 1、**2MHz**。1MHz 以下は MSB を取り違える。4MHz は読み戻しテストは通ったが、実機で相対モードの Y が出ず
+//! 動きも途切れがちだったので、実績のある 2MHz にしている。このパッドは SPI のクロックが低い（1MHz 以下）と MSB を取り違える。
 //! レジスタの読み戻しテストで、2MHz・4MHz は 0 エラー、250k〜1MHz は約半分が誤りと確認した（2026-10-13）。
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +26,7 @@ use esp_hal::{
 use hikyaku_pinnacle::{Attenuation, Pinnacle, RelativeOptions};
 #[cfg(feature = "trackpad-lowbyte")]
 use hikyaku_pointer::tracker::LowByteTracker;
+#[cfg(feature = "trackpad-absolute")]
 use hikyaku_pointer::{Config, Pointer};
 use log::{info, warn};
 
@@ -260,7 +262,7 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
         }
     }
     // 元に戻す
-    let cfg = SpiConfig::default().with_frequency(Rate::from_khz(4000)).with_mode(Mode::_1);
+    let cfg = SpiConfig::default().with_frequency(Rate::from_khz(2000)).with_mode(Mode::_1);
     let _ = pad.spi_mut().bus_mut().apply_config(&cfg);
     pad.set_cs_setup_ns(0);
     let _ = pad.write_reg(reg::Z_IDLE, saved_z);
@@ -301,7 +303,7 @@ const SCROLL_DIV: i32 = 8;
 /// **パッドが計算した移動量を 1:1 でそのまま**マウスレポートにする（加工しない。加速は OS に任せる）。
 #[cfg(not(feature = "trackpad-absolute"))]
 #[embassy_executor::task]
-pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'static>) {
+pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'static>) {
     let dev = match ExclusiveDevice::new(spi, cs, Delay::new()) {
         Ok(d) => d,
         Err(_) => {
