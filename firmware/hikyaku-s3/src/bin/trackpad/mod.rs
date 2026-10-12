@@ -27,7 +27,7 @@ use hikyaku_pinnacle::{Attenuation, Pinnacle, RelativeOptions};
 #[cfg(feature = "trackpad-lowbyte")]
 use hikyaku_pointer::tracker::LowByteTracker;
 #[cfg(not(feature = "trackpad-absolute"))]
-use hikyaku_pointer::relative::{Config as RelayConfig, Relay, StillFilter};
+use hikyaku_pointer::relative::{Config as RelayConfig, Relay, SoftTap, StillFilter};
 #[cfg(feature = "trackpad-absolute")]
 use hikyaku_pointer::{Config, Pointer};
 use log::{info, warn};
@@ -274,16 +274,19 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
     info!("selftest: done");
 }
 
-/// 相対モードの設定（タップ有効、感度 4X）。
+/// 相対モードの設定（タップ有効、感度 4X、ZIdle 0）。
 /// **パッド側の反転（invert_x/invert_y）は使わない。** データシートでは絶対座標モード用で、実機（2026-10-13）では
 /// Y 反転を入れると相対モードの Y の移動量がほとんど出なくなった。向きはソフト側（`SWAP_XY`・`SCREEN_*_INVERT`）で合わせる。
+///
+/// `trackpad-soft-tap` のときはパッド側のタップを切り、指を離した合図（ゼロパケット）のために ZIdle = 5 にする。
 #[cfg(not(feature = "trackpad-absolute"))]
 const REL_OPTIONS: RelativeOptions = RelativeOptions {
     sensitivity: Attenuation::X4,
-    primary_tap: true,
+    primary_tap: !cfg!(feature = "trackpad-soft-tap"),
     invert_x: false,
     invert_y: false,
     swap_xy: false,
+    z_idle: if cfg!(feature = "trackpad-soft-tap") { 5 } else { 0 },
 };
 
 /// パッドの軸と画面の軸の対応（基板裏の印字が読める向きを「上」とする）。
@@ -317,6 +320,8 @@ fn relay_config() -> RelayConfig {
         scroll_div: SCROLL_DIV,
         // 静止中のぶれを抑える（`trackpad-still-filter`）。既定は無効。
         still: cfg!(feature = "trackpad-still-filter").then_some(StillFilter::DEFAULT),
+        // 自前のタップ判定（`trackpad-soft-tap`）。既定はパッド側のタップ。
+        soft_tap: cfg!(feature = "trackpad-soft-tap").then_some(SoftTap::DEFAULT),
     }
 }
 

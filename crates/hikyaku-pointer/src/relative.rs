@@ -27,12 +27,110 @@ pub struct Config {
     pub scroll_div: i32,
     /// 静止中のぶれを抑えるフィルタ（[`StillFilter`]）。`None` で無効（ファームの既定）。
     pub still: Option<StillFilter>,
+    /// 自前のタップ判定（[`SoftTap`]）。`None` ならパッド側のタップ（パケットのボタンビット）を使う（ファームの既定）。
+    pub soft_tap: Option<SoftTap>,
 }
 
 impl Config {
     /// ファーム（`trackpad/mod.rs`）の 2026-10-13 時点の既定値。持ち主が実機で「調子が良い」と確認した設定。
     pub const FIRMWARE_DEFAULT: Config =
-        Config { swap_xy: true, invert_x: true, invert_y: true, gain: 2, scroll_div: 8, still: None };
+        Config { swap_xy: true, invert_x: true, invert_y: true, gain: 2, scroll_div: 8, still: None, soft_tap: None };
+}
+
+/// 自前のタップ判定の設定（ファームでは `trackpad-soft-tap` feature。パッド側のタップは切る）。
+///
+/// 相対モードのパケットには指の有無がないので、**パケットが来ている時間**で接触を見る:
+/// パケットが `gap_ms` 以上途切れたら接触の終わり。接触が `max_ms` 以内で、移動量の合計（|dx|+|dy|）が `max_move` 以内なら
+/// タップとして、左クリックを `click_ms` 押して離す。スワイプ（移動量が大きい）や長押しはクリックにしない。
+///
+/// 「置いたまま止めている間はパケットが来ない」場合に、置いた直後の静けさをタップと誤らないよう、既定では
+/// **接触の終わりにゼロパケット（dx=dy=0）が要る**（`require_lift`）。パッドの ZIdle を 1 以上にしておくと、
+/// 指を離したときにゼロパケットが ZIdle 個送られてくるので、それを「離した」合図にする
+/// （`RelativeOptions::z_idle`。QMK は 5）。ZIdle が 0 のままだとクリックは一切出ない（誤クリックより安全な側に倒す）。
+///
+/// クリックが出るのは、指を離してからおよそ ZIdle × 10ms + `gap_ms` 後。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SoftTap {
+    /// パケットがこの時間（ms）途切れたら、接触が終わったとみなす（パッドは約 10ms ごとに出す）。
+    pub gap_ms: u32,
+    /// タップとみなす接触時間の上限（最初のパケットから最後のパケットまで。ms。ZIdle の分を含む）。
+    pub max_ms: u32,
+    /// タップとみなす移動量の上限（接触中の |dx|+|dy| の合計。パッドの単位）。
+    pub max_move: i32,
+    /// クリックを押している時間（ms）。
+    pub click_ms: u32,
+    /// 接触の終わりにゼロパケット（指を離したときの ZIdle パケット）を要求する。
+    pub require_lift: bool,
+}
+
+impl SoftTap {
+    pub const DEFAULT: SoftTap = SoftTap { gap_ms: 30, max_ms: 200, max_move: 10, click_ms: 30, require_lift: true };
+}
+
+impl Default for SoftTap {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TapTouch {
+    down_ms: u32,
+    last_ms: u32,
+    /// |dx|+|dy| の合計。
+    moved: i32,
+    motion_packets: u32,
+    /// 末尾に続いているゼロパケットの数。
+    trailing_zeros: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TapState {
+    touch: Option<TapTouch>,
+    /// クリックを離す時刻。
+    release_at: Option<u32>,
+    /// 今押しているボタン（bit0）。
+    button: u8,
+}
+
+impl TapState {
+    /// パケットを 1 つ見る。
+    fn push(&mut self, t: &SoftTap, now_ms: u32, pkt: &Relative) {
+        self.tick(t, now_ms);
+        let zero = pkt.dx == 0 && pkt.dy == 0 && pkt.buttons == 0;
+        let touch = self.touch.get_or_insert(TapTouch { down_ms: now_ms, last_ms: now_ms, ..Default::default() });
+        touch.last_ms = now_ms;
+        touch.moved = touch.moved.saturating_add((pkt.dx as i32).abs() + (pkt.dy as i32).abs());
+        if zero {
+            touch.trailing_zeros += 1;
+        } else {
+            touch.motion_packets += 1;
+            touch.trailing_zeros = 0;
+        }
+    }
+
+    /// 時間で決まる処理: クリックの解放と、接触の終わり（タップならクリック）。
+    fn tick(&mut self, t: &SoftTap, now_ms: u32) {
+        if let Some(at) = self.release_at {
+            if now_ms.wrapping_sub(at) < u32::MAX / 2 {
+                self.button = 0;
+                self.release_at = None;
+            }
+        }
+        if let Some(touch) = self.touch {
+            if now_ms.wrapping_sub(touch.last_ms) > t.gap_ms {
+                self.touch = None;
+                let is_tap = touch.last_ms.wrapping_sub(touch.down_ms) <= t.max_ms
+                    && touch.moved <= t.max_move
+                    && touch.motion_packets >= 1
+                    && (!t.require_lift || touch.trailing_zeros >= 1);
+                if is_tap {
+                    self.button = 1;
+                    self.release_at = Some(now_ms.wrapping_add(t.click_ms));
+                }
+            }
+        }
+    }
 }
 
 /// 静止中のぶれを抑えるフィルタの設定（ファームでは `trackpad-still-filter` feature）。
@@ -144,6 +242,7 @@ pub struct Relay {
     /// 最後に送ったボタン状態。
     last_buttons: u8,
     still: StillState,
+    tap: TapState,
 }
 
 impl Relay {
@@ -163,6 +262,7 @@ impl Relay {
                 hist_len: 0,
                 last_ms: None,
             },
+            tap: TapState { touch: None, release_at: None, button: 0 },
         }
     }
 
@@ -187,7 +287,13 @@ impl Relay {
     /// - `now_ms`: 単調増加する時刻（ms）。時間を使う処理（フィルタ・タップ判定）のため。基本の変換では使わない。
     /// - `scroll_mode`: true の間は移動をホイールに変換する。
     pub fn push(&mut self, now_ms: u32, pkt: &Relative, scroll_mode: bool, emit: impl FnMut([u8; 5])) {
-        let buttons = pkt.buttons & 1; // タップ = 左クリック
+        let buttons = match self.cfg.soft_tap {
+            Some(t) => {
+                self.tap.push(&t, now_ms, pkt);
+                self.tap.button
+            }
+            None => pkt.buttons & 1, // パッド側のタップ = 左クリック
+        };
         let (mut sx, mut sy) = self.orient(pkt.dx, pkt.dy);
         if let Some(f) = self.cfg.still {
             (sx, sy) = self.still.apply(&f, now_ms, sx, sy);
@@ -196,9 +302,14 @@ impl Relay {
         self.flush(buttons, emit);
     }
 
-    /// パケットが無かった周期に呼ぶ。時間で決まる処理（タップのクリック解放など）のため。基本の変換では何もしない。
+    /// パケットが無かった周期に呼ぶ。時間で決まる処理（自前のタップ判定のクリックと解放）のため。基本の変換では何もしない。
     pub fn poll(&mut self, now_ms: u32, emit: impl FnMut([u8; 5])) {
-        let _ = (now_ms, emit);
+        if let Some(t) = self.cfg.soft_tap {
+            self.tap.tick(&t, now_ms);
+            if self.tap.button != self.last_buttons {
+                self.flush(self.tap.button, emit);
+            }
+        }
     }
 
     fn accumulate(&mut self, sx: i32, sy: i32, scroll_mode: bool) {
@@ -291,7 +402,107 @@ mod tests {
     }
 
     fn plain() -> Config {
-        Config { swap_xy: false, invert_x: false, invert_y: false, gain: 1, scroll_div: 8, still: None }
+        Config { swap_xy: false, invert_x: false, invert_y: false, gain: 1, scroll_div: 8, still: None, soft_tap: None }
+    }
+
+    fn with_tap() -> Config {
+        Config { soft_tap: Some(SoftTap::DEFAULT), ..plain() }
+    }
+
+    /// 5ms ごとに時間を進め、`events` の時刻にパケットを入れる（それ以外は poll）。出たレポートを (時刻, レポート) で返す。
+    fn run_timed(relay: &mut Relay, events: &[(u32, Relative)], until_ms: u32) -> Vec<(u32, [u8; 5])> {
+        let mut out = Vec::new();
+        let mut t = 0u32;
+        let mut i = 0usize;
+        while t <= until_ms {
+            if i < events.len() && events[i].0 == t {
+                relay.push(t, &events[i].1, false, |r| out.push((t, r)));
+                i += 1;
+            } else {
+                relay.poll(t, |r| out.push((t, r)));
+            }
+            t += 5;
+        }
+        out
+    }
+
+    /// 接触（小さな動き）の後、指を離したときの ZIdle のゼロパケット（5 個）。
+    fn tap_events(start: u32) -> Vec<(u32, Relative)> {
+        let mut e = vec![(start, pkt(0, 1, 0)), (start + 10, pkt(0, 0, -1)), (start + 20, pkt(0, 1, 1))];
+        for k in 0..5u32 {
+            e.push((start + 30 + k * 10, pkt(0, 0, 0)));
+        }
+        e
+    }
+
+    #[test]
+    fn soft_tap_clicks_after_a_short_touch_with_lift() {
+        let mut r = Relay::new(with_tap());
+        let out = run_timed(&mut r, &tap_events(100), 400);
+        let reports: Vec<[u8; 5]> = out.iter().map(|o| o.1).collect();
+        // 接触中の小さな動き 3 つ → その後、押す → 離す
+        assert_eq!(reports[..3], [[0, 1, 0, 0, 0], [0, 0, 0xFF, 0, 0], [0, 1, 1, 0, 0]]);
+        assert_eq!(reports[3..], [[1, 0, 0, 0, 0], [0, 0, 0, 0, 0]]);
+        // 最後のパケット（170ms）+ gap 30ms の後に押し、click_ms 後に離す
+        let press = out[3].0;
+        let release = out[4].0;
+        assert!(press > 170 + 30 && press <= 170 + 30 + 10, "press at {press}");
+        assert!(release >= press + 30 && release < press + 40, "release at {release}");
+    }
+
+    #[test]
+    fn soft_tap_ignores_a_swipe() {
+        let mut r = Relay::new(with_tap());
+        let mut e = vec![(0, pkt(0, 4, 0)), (10, pkt(0, 8, 1)), (20, pkt(0, 9, 0)), (30, pkt(0, 3, 0))];
+        for k in 0..5u32 {
+            e.push((40 + k * 10, pkt(0, 0, 0)));
+        }
+        let out = run_timed(&mut r, &e, 300);
+        assert!(out.iter().all(|o| o.1[0] == 0), "no click: {out:?}");
+    }
+
+    #[test]
+    fn soft_tap_ignores_touch_and_hold_even_if_the_pad_goes_quiet() {
+        let mut r = Relay::new(with_tap());
+        // 置いた直後に 2 パケット → 止めている間は無音 → 500ms 後に離す（ゼロパケット）
+        let mut e = vec![(0, pkt(0, 1, 0)), (10, pkt(0, 0, 1))];
+        for k in 0..5u32 {
+            e.push((500 + k * 10, pkt(0, 0, 0)));
+        }
+        let out = run_timed(&mut r, &e, 800);
+        assert!(out.iter().all(|o| o.1[0] == 0), "no click: {out:?}");
+    }
+
+    #[test]
+    fn soft_tap_without_lift_marker_does_not_click_by_default() {
+        let mut r = Relay::new(with_tap());
+        // ZIdle が 0 のままなら、離してもゼロパケットは来ない → クリックしない
+        let e = vec![(0, pkt(0, 1, 0)), (10, pkt(0, 0, 1))];
+        let out = run_timed(&mut r, &e, 300);
+        assert!(out.iter().all(|o| o.1[0] == 0));
+        // require_lift を切ると、途切れただけでタップになる（置いたまま止めると誤クリックの恐れ）
+        let mut r = Relay::new(Config { soft_tap: Some(SoftTap { require_lift: false, ..SoftTap::DEFAULT }), ..plain() });
+        let out = run_timed(&mut r, &e, 300);
+        assert!(out.iter().any(|o| o.1[0] == 1));
+    }
+
+    #[test]
+    fn soft_tap_double_tap_gives_two_clicks() {
+        let mut r = Relay::new(with_tap());
+        let mut e = tap_events(0);
+        e.extend(tap_events(200));
+        let out = run_timed(&mut r, &e, 600);
+        let presses = out.iter().filter(|o| o.1[0] == 1).count();
+        let releases = out.iter().filter(|o| o.1[0] == 0 && o.1[1..] == [0, 0, 0, 0]).count();
+        assert_eq!((presses, releases), (2, 2), "{out:?}");
+    }
+
+    #[test]
+    fn soft_tap_ignores_pad_button_bit() {
+        let mut r = Relay::new(with_tap());
+        // パッド側のタップビットが立っていても（切り忘れ）、自前の判定だけを使う
+        let out = run_timed(&mut r, &[(0, pkt(1, 5, 5))], 100);
+        assert_eq!(out.iter().map(|o| o.1).collect::<Vec<_>>(), vec![[0, 5, 5, 0, 0]]);
     }
 
     fn with_still() -> Config {

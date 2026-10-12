@@ -165,14 +165,17 @@ pub struct RelativeOptions {
     pub invert_x: bool,
     pub invert_y: bool,
     pub swap_xy: bool,
+    /// ZIdle: 指を離したときにパッドが送る「空」パケット（相対モードでは dx=dy=0）の数。
+    /// 0（ZMK と同じ）なら送らない。QMK は 5。ソフト側でタップを判定するときの「離した」合図に使える。
+    pub z_idle: u8,
 }
 
 impl Default for RelativeOptions {
-    /// タップ有効、感度 4X、反転なし。
+    /// タップ有効、感度 4X、反転なし、ZIdle 0。
     /// パッド側の反転（FeedConfig1 の bit6/bit7）はデータシートでは絶対座標用。実機では相対モードで Y 反転を入れると
     /// Y の移動量がほとんど出なくなったので、既定では使わない（向きは受け取った側で合わせる）。
     fn default() -> Self {
-        Self { sensitivity: Attenuation::X4, primary_tap: true, invert_x: false, invert_y: false, swap_xy: false }
+        Self { sensitivity: Attenuation::X4, primary_tap: true, invert_x: false, invert_y: false, swap_xy: false, z_idle: 0 }
     }
 }
 
@@ -295,7 +298,7 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
     ///
     /// ソフトリセット → 電源投入時のキャリブレーション完了（SW_CC）を待つ → 感度（ADC 減衰）→ キャリブレーション →
     /// FeedConfig2（GlideExtend・スクロール・二次タップ無効。IntelliMouse は使わない＝3 バイトのパケット）→
-    /// FeedConfig1（相対モードで有効化 + 反転）→ ZIdle = 0。
+    /// FeedConfig1（相対モードで有効化 + 反転）→ ZIdle（既定 0）。
     /// **起動中（約 0.5 秒）はパッドに触れないこと**（補正が狂う）。
     pub fn init_relative<D: DelayNs>(&mut self, delay: &mut D, opt: RelativeOptions) -> Result<Info, Error<SPI::Error>> {
         let firmware_id = self.read_reg(reg::FIRMWARE_ID)?;
@@ -338,7 +341,7 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
             f1 |= FEED1_Y_INVERT;
         }
         self.write_reg(reg::FEED_CONFIG1, f1)?;
-        self.write_reg(reg::Z_IDLE, 0)?;
+        self.write_reg(reg::Z_IDLE, opt.z_idle)?;
         self.clear_flags_wait(delay)?;
         Ok(Info { firmware_id, firmware_version })
     }
@@ -804,11 +807,13 @@ mod tests {
         let mut m = Mock::new();
         m.regs[0] = 0x07;
         let mut p = Pinnacle::new(m);
-        let opt = RelativeOptions { primary_tap: false, invert_y: false, invert_x: true, swap_xy: true, ..Default::default() };
+        let opt =
+            RelativeOptions { primary_tap: false, invert_y: false, invert_x: true, swap_xy: true, z_idle: 5, ..Default::default() };
         p.init_relative(&mut NoDelay, opt).unwrap();
         let m = p.release();
         assert_eq!(m.regs[reg::FEED_CONFIG2 as usize], 0x1C | 0x02 | 0x80);
         assert_eq!(m.regs[reg::FEED_CONFIG1 as usize], 0x01 | 0x40);
+        assert_eq!(m.regs[reg::Z_IDLE as usize], 5);
     }
 
     #[test]

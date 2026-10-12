@@ -7,6 +7,7 @@
 //! キー（省略時はファームの既定値）:
 //!   gain=2 swap=1 invx=1 invy=1 scroll_div=8   変換の設定
 //!   still=0                                    1 で静止中のぶれを抑えるフィルタ（trackpad-still-filter）を有効にする
+//!   tap=0                                      1 で自前のタップ判定（trackpad-soft-tap）を有効にする（パッドのタップビットは無視）
 //!   scroll=0                                   1 でスクロールモードとして再生
 //!   quiet=1                                    1 行ごとの出力を省き、集計だけ出す
 //!   skip_fc=1                                  配線が外れているときのゴミ（raw=[fc, fc, fc]）を読み飛ばす
@@ -14,7 +15,7 @@
 //! 出力: 1 パケット 1 行（時刻・生バイト・dx/dy・出たレポート）と、末尾に集計
 //! （パケット数、ゼロパケット数、レポート数、移動量の合計、1 レポートの最大移動量、クリック数）。
 
-use hikyaku_pointer::relative::{parse_trace_line, Config, Relay, StillFilter};
+use hikyaku_pointer::relative::{parse_trace_line, Config, Relay, SoftTap, StillFilter};
 use std::{env, fs};
 
 fn main() {
@@ -32,6 +33,7 @@ fn main() {
             "invy" => cfg.invert_y = n != 0,
             "scroll_div" => cfg.scroll_div = n as i32,
             "still" => cfg.still = (n != 0).then_some(StillFilter::DEFAULT),
+            "tap" => cfg.soft_tap = (n != 0).then_some(SoftTap::DEFAULT),
             "scroll" => scroll = n != 0,
             "quiet" => quiet = n != 0,
             "skip_fc" => skip_fc = n != 0,
@@ -44,6 +46,8 @@ fn main() {
     let (mut sum_x, mut sum_y, mut max_step) = (0i64, 0i64, 0i32);
     let mut last_buttons = 0u8;
     let mut boots = 0usize;
+    let mut last_ms: Option<u32> = None;
+    let mut pending: Vec<[u8; 5]> = Vec::new();
     for line in text.lines() {
         if line.contains("ESP-ROM") {
             boots += 1;
@@ -55,12 +59,23 @@ fn main() {
         if skip_fc && l.raw == [0xfc, 0xfc, 0xfc] {
             continue;
         }
+        // ファームと同じく、パケットの間は 5ms ごとに poll する（時間で決まる処理のため）
+        if let Some(prev) = last_ms {
+            if l.ms > prev && l.ms - prev < 5000 {
+                let mut t = prev + 5;
+                while t < l.ms {
+                    relay.poll(t, |r| pending.push(r));
+                    t += 5;
+                }
+            }
+        }
+        last_ms = Some(l.ms);
         let p = l.packet();
         packets += 1;
         if p.dx == 0 && p.dy == 0 && p.buttons == 0 {
             zero_packets += 1;
         }
-        let mut out = Vec::new();
+        let mut out = std::mem::take(&mut pending);
         relay.push(l.ms, &p, scroll, |r| out.push(r));
         for r in &out {
             reports += 1;

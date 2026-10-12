@@ -17,6 +17,9 @@ trackpad-trace = ["trackpad"]
 # 静止中のぶれ（指を置いたままでの ±1〜2 の揺れ）を抑えるフィルタ（hikyaku_pointer::relative::StillFilter）。
 # 動き始めの反応は鈍らせない（1 パケットで大きく動いたときはそのまま通す）。既定は無効。
 trackpad-still-filter = ["trackpad"]
+# パッド側のタップを切り、ソフト側でタップを判定する（hikyaku_pointer::relative::SoftTap）。スワイプ中の誤クリック対策。
+# 指を離した合図に ZIdle = 5（QMK と同じ）を使う。既定は無効（パッド側のタップ）。
+trackpad-soft-tap = ["trackpad"]
 # 起動時に SPI の読み書きの総当たりテスト（モード × 周波数 × CS 待ち）を行い、結果をログに出す。
 trackpad-selftest = ["trackpad"]
 # 旧方式: 絶対座標から移動量を自前で作る（既定は相対モード）。
