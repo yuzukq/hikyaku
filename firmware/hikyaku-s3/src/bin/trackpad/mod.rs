@@ -4,7 +4,8 @@
 //! `trackpad-absolute` を付けると、絶対座標から移動量を自前で作る旧方式になる。
 //!
 //! 配線（docs/hardware/wiring.md）: SCK=GPIO12 / MISO=GPIO13 / MOSI=GPIO11 / SS=GPIO10 / DR=GPIO9（SPI2 の標準ピン + DR）。
-//! SPI モード 1、250kHz（1MHz では読み取りエラーが多かった）。疎通は実機で確認済み（2026-10-11）。
+//! SPI モード 1、**2MHz**。このパッドは SPI のクロックが低い（1MHz 以下）と MSB を取り違える。
+//! レジスタの読み戻しテストで、2MHz・4MHz は 0 エラー、250k〜1MHz は約半分が誤りと確認した（2026-10-13）。
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -218,8 +219,8 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
     const PATTERNS: [u8; 10] = [0x00, 0xFF, 0x80, 0x7F, 0xAA, 0x55, 0x01, 0xFE, 0xC3, 0x3C];
     let saved_z = pad.read_reg(reg::Z_IDLE).unwrap_or(0x1E);
     info!("selftest: start (ZIdle was {:#04x})", saved_z);
-    for (mode, mname) in [(Mode::_1, 1u8), (Mode::_3, 3), (Mode::_0, 0), (Mode::_2, 2)] {
-        for khz in [250u32, 500, 1000, 2000, 4000] {
+    for (mode, mname) in [(Mode::_1, 1u8)] {
+        for khz in [1000u32, 2000, 4000, 8000, 10000] {
             for setup_ns in [0u32, 10_000] {
                 let cfg = SpiConfig::default().with_frequency(Rate::from_khz(khz)).with_mode(mode);
                 if pad.spi_mut().bus_mut().apply_config(&cfg).is_err() {
@@ -259,7 +260,7 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
         }
     }
     // 元に戻す
-    let cfg = SpiConfig::default().with_frequency(Rate::from_khz(250)).with_mode(Mode::_1);
+    let cfg = SpiConfig::default().with_frequency(Rate::from_khz(2000)).with_mode(Mode::_1);
     let _ = pad.spi_mut().bus_mut().apply_config(&cfg);
     pad.set_cs_setup_ns(0);
     let _ = pad.write_reg(reg::Z_IDLE, saved_z);
@@ -269,10 +270,10 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
     info!("selftest: done");
 }
 
-/// 相対モード用のゲイン（1/256 単位）。パッドの移動量の単位は細かくないので、QMK の既定（4 倍）に近い値から始める。
-/// 速すぎる・遅すぎるときはここを調整する。
+/// 相対モード用のゲイン（1/256 単位）。パッドの移動量の単位は細かい（絶対座標と同じで 1mm あたり約 66）ので、
+/// 1mm の指の動きがカーソルの 25〜30 カウント程度になる 0.4 倍から始める。速すぎる・遅すぎるときはここを調整する。
 #[cfg(not(feature = "trackpad-absolute"))]
-const REL_GAIN_Q8: u32 = 512;
+const REL_GAIN_Q8: u32 = 100;
 
 #[cfg(not(feature = "trackpad-absolute"))]
 #[embassy_executor::task]
