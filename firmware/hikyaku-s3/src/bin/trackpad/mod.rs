@@ -324,6 +324,11 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
     // 起動時はキャリブレーションが走る。パッドに触れないこと（補正が狂う）。
     match pad.init_relative(&mut Delay::new(), REL_OPTIONS) {
         Ok(i) => info!("trackpad: relative mode, firmware id={:#04x} version={:#04x}", i.firmware_id, i.firmware_version),
+        Err(hikyaku_pinnacle::Error::BadId(id)) => {
+            // 配線（MISO・電源・GND・CS）が外れていると、0x00 や 0xFC が読める。ゴミを送らないよう、ここで止める。
+            warn!("trackpad: wrong firmware id {:#04x} (expected 0x07). Check the 12-pin FFC / wiring. Trackpad disabled.", id);
+            return;
+        }
         Err(_) => {
             warn!("trackpad: init failed (check wiring)");
             return;

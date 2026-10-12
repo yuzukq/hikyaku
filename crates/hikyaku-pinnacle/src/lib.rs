@@ -96,7 +96,12 @@ pub enum Error<E> {
     Spi(E),
     /// 読み出しサイズが `MAX_READ` を超えた。
     TooLong,
+    /// ファームウェア ID が Pinnacle（0x07）ではない。配線（特に MISO・電源）が外れていることが多い。
+    BadId(u8),
 }
+
+/// Pinnacle（1CA027）のファームウェア ID。
+pub const FIRMWARE_ID: u8 = 0x07;
 
 /// 絶対座標の 1 サンプル。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -295,6 +300,10 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
     pub fn init_relative<D: DelayNs>(&mut self, delay: &mut D, opt: RelativeOptions) -> Result<Info, Error<SPI::Error>> {
         let firmware_id = self.read_reg(reg::FIRMWARE_ID)?;
         let firmware_version = self.read_reg(reg::FIRMWARE_VERSION)?;
+        // Zephyr と同じく、ID が違えば初期化しない（配線が外れていると 0x00 や 0xFC が読め、ゴミを移動量として送ってしまう）。
+        if firmware_id != FIRMWARE_ID {
+            return Err(Error::BadId(firmware_id));
+        }
 
         self.clear_flags_wait(delay)?;
         self.write_reg(reg::SYS_CONFIG1, SYS_RESET)?;
@@ -781,8 +790,20 @@ mod tests {
     }
 
     #[test]
+    fn init_relative_rejects_wrong_firmware_id() {
+        let mut m = Mock::new();
+        m.regs[0] = 0xFC; // 配線が外れて詰め物のバイトが読めている
+        let mut p = Pinnacle::new(m);
+        assert!(matches!(p.init_relative(&mut NoDelay, RelativeOptions::default()), Err(Error::BadId(0xFC))));
+        // 何も書き込んでいない
+        assert!(p.release().writes.is_empty());
+    }
+
+    #[test]
     fn init_relative_options() {
-        let mut p = Pinnacle::new(Mock::new());
+        let mut m = Mock::new();
+        m.regs[0] = 0x07;
+        let mut p = Pinnacle::new(m);
         let opt = RelativeOptions { primary_tap: false, invert_y: false, invert_x: true, swap_xy: true, ..Default::default() };
         p.init_relative(&mut NoDelay, opt).unwrap();
         let m = p.release();
