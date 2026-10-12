@@ -163,9 +163,11 @@ pub struct RelativeOptions {
 }
 
 impl Default for RelativeOptions {
-    /// Cirque 公式の USB マウスのサンプルと同じ（Y を反転して画面の向きに合わせる、タップ有効、感度 4X）。
+    /// タップ有効、感度 4X、反転なし。
+    /// パッド側の反転（FeedConfig1 の bit6/bit7）はデータシートでは絶対座標用。実機では相対モードで Y 反転を入れると
+    /// Y の移動量がほとんど出なくなったので、既定では使わない（向きは受け取った側で合わせる）。
     fn default() -> Self {
-        Self { sensitivity: Attenuation::X4, primary_tap: true, invert_x: false, invert_y: true, swap_xy: false }
+        Self { sensitivity: Attenuation::X4, primary_tap: true, invert_x: false, invert_y: false, swap_xy: false }
     }
 }
 
@@ -772,8 +774,8 @@ mod tests {
         assert!(m.writes.contains(&(reg::SYS_CONFIG1, SYS_RESET)));
         // GlideExtend・スクロール・二次タップ無効、タップ有効、IntelliMouse なし
         assert_eq!(m.regs[reg::FEED_CONFIG2 as usize], 0x1C);
-        // 相対モードで有効 + Y 反転（Cirque の USB マウスのサンプルと同じ 0x81）
-        assert_eq!(m.regs[reg::FEED_CONFIG1 as usize], 0x81);
+        // 相対モードで有効（パッド側の反転なし）
+        assert_eq!(m.regs[reg::FEED_CONFIG1 as usize], 0x01);
         assert_eq!(m.regs[reg::Z_IDLE as usize], 0);
         assert_eq!(m.era[0x0187] & 0xC0, 0xC0, "sensitivity 4x");
     }

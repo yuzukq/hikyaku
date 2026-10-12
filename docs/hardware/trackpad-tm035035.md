@@ -66,9 +66,11 @@ ZMK（Zephyr の `drivers/input/input_pinnacle.c`）と Cirque 公式の USB マ
 - **相対モード**で、パッドが計算した移動量を **1:1 でそのまま**マウスレポートにする（加速は OS に任せる）。
   丸いパッドを長方形の画面に対応づける絶対座標の方式はやめた。
 - 初期化: ソフトリセット → 電源投入時のキャリブレーション完了（SW_CC）を待つ → 感度（ADC 減衰 4X）→ キャリブレーション
-  → `FeedConfig2 = 0x1C`（GlideExtend・スクロール・二次タップ無効。タップ有効）→ `FeedConfig1 = 0x81`（相対 + 有効 + Y 反転）→ ZIdle = 0。
+  → `FeedConfig2 = 0x1C`（GlideExtend・スクロール・二次タップ無効。タップ有効）→ `FeedConfig1 = 0x01`（相対 + 有効）→ ZIdle = 0。
+  **パッド側の反転ビット（0x40/0x80）は使わない**: 相対モードで Y 反転を入れると Y の移動量がほとんど出なくなった（2026-10-13）。
+  向きはファーム側（`SWAP_XY`・`SCREEN_X_INVERT`・`SCREEN_Y_INVERT`）で合わせる。この個体はパッドが 90 度回った向きで付いている。
 - パケットは 3 バイト。`dx = b1 (b0 の bit4 が立っていたら -256)`、`dy` も同様（bit5）。タップは `b0` の bit0。
-- 向き・反転・XY 入れ替えは `firmware/hikyaku-s3/src/bin/trackpad/mod.rs` の `REL_OPTIONS`。
+- 向き・反転・XY 入れ替えは `firmware/hikyaku-s3/src/bin/trackpad/mod.rs` の `SWAP_XY`・`SCREEN_*_INVERT`。
 
 
 

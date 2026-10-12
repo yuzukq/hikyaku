@@ -270,14 +270,15 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
     info!("selftest: done");
 }
 
-/// 相対モードの設定。向きが合わないときはここを変える（基板裏の印字が読める向きを「上」とする）。
-/// 既定は Cirque 公式の USB マウスのサンプルと同じ（Y を反転、タップ有効、感度 4X）。
+/// 相対モードの設定（タップ有効、感度 4X）。
+/// **パッド側の反転（invert_x/invert_y）は使わない。** データシートでは絶対座標モード用で、実機（2026-10-13）では
+/// Y 反転を入れると相対モードの Y の移動量がほとんど出なくなった。向きはソフト側（`SWAP_XY`・`SCREEN_*_INVERT`）で合わせる。
 #[cfg(not(feature = "trackpad-absolute"))]
 const REL_OPTIONS: RelativeOptions = RelativeOptions {
     sensitivity: Attenuation::X4,
     primary_tap: true,
     invert_x: false,
-    invert_y: true,
+    invert_y: false,
     swap_xy: false,
 };
 
