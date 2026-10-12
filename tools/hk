@@ -8,7 +8,7 @@
 #
 # 環境変数:
 #   FEATURES  ビルドする機能（既定: trackpad）。例: FEATURES="trackpad trackpad-trace" tools/hk flash
-#   PORT      S3 の書き込みポート（既定: /dev/ttyACM0）
+#   PORT      S3 の書き込みポート（既定: ベンダー ID 303a のポートを自動で探す）
 #
 # 書き込みの手順:
 #   1. S3 から CH9102F の 5V とキーボードを外す（5V がつながったまま PC に挿すと電源がぶつかる）
@@ -20,7 +20,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FW="$ROOT/firmware/hikyaku-s3"
 ELF="$FW/target/xtensa-esp32s3-none-elf/release/hikyaku-s3"
 FEATURES="${FEATURES:-trackpad}"
-PORT="${PORT:-/dev/ttyACM0}"
+# PORT を指定しなければ、S3（ベンダー ID 303a）のポートを自動で探す
+PORT="${PORT:-}"
 KEYFILE="$HOME/.config/hikyaku/ota.key"
 PEERFILE="$HOME/.config/hikyaku/ota.peer"
 
@@ -48,6 +49,22 @@ uart_port() {
   done
 }
 
+# S3 の書き込みポート（ベンダー ID 303a）。CH9102F と両方挿していても取り違えない。
+s3_port() {
+  if [ -n "$PORT" ]; then
+    [ -e "$PORT" ] && echo "$PORT"
+    return
+  fi
+  local p
+  for p in /dev/ttyACM* /dev/ttyUSB*; do
+    [ -e "$p" ] || continue
+    if udevadm info -q property -n "$p" 2>/dev/null | grep -q "ID_VENDOR_ID=303a"; then
+      echo "$p"
+      return
+    fi
+  done
+}
+
 cmd_build() {
   [ -f "$HOME/export-esp.sh" ] || { c_err "~/export-esp.sh がありません（espup install が必要）"; exit 1; }
   # shellcheck disable=SC1091
@@ -68,14 +85,16 @@ cmd_flash() {
   c_info "S3 を待っています… BOOT を押しながら S3 を PC に挿してください（Ctrl-C で中止）"
   local tries=0
   while true; do
-    if s3_present && [ -e "$PORT" ]; then
+    local port
+    port="$(s3_port || true)"
+    if s3_present && [ -n "$port" ]; then
       # 他のプロセス（ログ取得など）がポートを開いていると、書き込みが失敗する
-      if command -v fuser >/dev/null && fuser "$PORT" >/dev/null 2>&1; then
-        c_err "$PORT を他のプロセスが使っています。止めてから、もう一度実行してください:"
-        fuser -v "$PORT" >&2 || true
+      if command -v fuser >/dev/null && fuser "$port" >/dev/null 2>&1; then
+        c_err "$port を他のプロセスが使っています。止めてから、もう一度実行してください:"
+        fuser -v "$port" >&2 || true
         exit 1
       fi
-      if espflash flash --port "$PORT" --partition-table "$FW/partitions.csv" "$ELF"; then
+      if espflash flash --port "$port" --partition-table "$FW/partitions.csv" "$ELF"; then
         c_ok "書き込み完了。S3 を抜いて、キーボードと CH9102F を元に戻してください。"
         return 0
       fi
