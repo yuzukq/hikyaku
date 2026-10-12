@@ -337,6 +337,38 @@ impl Pointer {
         self.finish(now_ms, ox, oy, 0, 0)
     }
 
+    /// 相対モード用: パッド自身が計算した移動量（`dx`, `dy`。画面の座標系）とボタンから、マウスレポートを作る。
+    ///
+    /// ゲイン・加速・端数の持ち越しをここで掛ける（`gain_q8` など）。`scroll_mode` が true の間は、移動をスクロールに変換する。
+    pub fn update_relative(&mut self, now_ms: u32, dx: i32, dy: i32, buttons: u8, scroll_mode: bool) -> Option<MouseReport> {
+        self.buttons = buttons;
+        if scroll_mode {
+            let div = self.cfg.scroll_div.max(1);
+            let sy = if self.cfg.scroll_invert_y { dy } else { -dy };
+            let sx = if self.cfg.scroll_invert_x { -dx } else { dx };
+            let wheel = self.acc_wheel.push(sy * 256 / div);
+            let pan = self.acc_pan.push(sx * 256 / div);
+            return self.finish(now_ms, 0, 0, wheel, pan);
+        }
+        // 主軸がはっきりしているときは副軸を抑える。
+        let (mut dx, mut dy) = (dx, dy);
+        let r = self.cfg.axis_damp_ratio.max(1);
+        if dx.abs() >= r * dy.abs() {
+            dy = dy * self.cfg.axis_damp_q8 / 256;
+        } else if dy.abs() >= r * dx.abs() {
+            dx = dx * self.cfg.axis_damp_q8 / 256;
+        }
+        let speed = dx.abs().max(dy.abs()) as u32;
+        let mut gain = self.cfg.gain_q8;
+        if self.cfg.accel_ref > 0 {
+            let boost = (gain * speed.min(self.cfg.accel_ref * 4) / self.cfg.accel_ref).min(self.cfg.accel_max_q8);
+            gain += boost;
+        }
+        let ox = self.acc_x.push(dx * gain as i32);
+        let oy = self.acc_y.push(dy * gain as i32);
+        self.finish(now_ms, ox, oy, 0, 0)
+    }
+
     fn finish(&mut self, _now_ms: u32, x: i8, y: i8, wheel: i8, pan: i8) -> Option<MouseReport> {
         if x == 0 && y == 0 && wheel == 0 && pan == 0 && self.buttons == self.sent_buttons {
             return None;
@@ -631,6 +663,33 @@ mod tests {
             }
         }
         assert!(outs.iter().all(|&x| x == 20), "{outs:?}");
+    }
+
+    #[test]
+    fn relative_applies_gain_and_carries_remainder() {
+        let cfg = Config { gain_q8: 128, ..plain() }; // 0.5 倍
+        let mut p = Pointer::new(cfg);
+        assert_eq!(p.update_relative(0, 1, 0, 0, false), None); // 0.5 → 0
+        let r = p.update_relative(10, 1, 0, 0, false).unwrap(); // 合計 1.0 → 1
+        assert_eq!(r.x, 1);
+    }
+
+    #[test]
+    fn relative_passes_buttons_and_reports_changes() {
+        let mut p = Pointer::new(Config { axis_damp_q8: 256, ..plain() });
+        let r = p.update_relative(0, 10, -5, 1, false).unwrap();
+        assert_eq!((r.x, r.y, r.buttons), (10, -5, 1));
+        // 動きなし・ボタン変化なしなら報告しない
+        assert_eq!(p.update_relative(10, 0, 0, 1, false), None);
+        // ボタンが離れたら報告
+        assert_eq!(p.update_relative(20, 0, 0, 0, false).unwrap().buttons, 0);
+    }
+
+    #[test]
+    fn relative_scroll_mode_makes_wheel() {
+        let mut p = Pointer::new(plain()); // scroll_div = 40
+        let r = p.update_relative(0, 0, 80, 0, true).unwrap();
+        assert_eq!((r.x, r.y, r.wheel), (0, 0, -2));
     }
 
     #[test]

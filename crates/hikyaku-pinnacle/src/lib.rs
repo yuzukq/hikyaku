@@ -71,6 +71,13 @@ pub enum Attenuation {
     X4 = 0xC0,
 }
 
+/// FeedConfig2（相対モード用）
+const FEED2_INTELLIMOUSE: u8 = 0x01;
+const FEED2_ALL_TAP_DISABLE: u8 = 0x02;
+const FEED2_SECONDARY_TAP_DISABLE: u8 = 0x04;
+const FEED2_SCROLL_DISABLE: u8 = 0x08;
+const FEED2_GLIDE_EXTEND_DISABLE: u8 = 0x10;
+
 /// FeedConfig1: Feed Enable
 const FEED_ENABLE: u8 = 1 << 0;
 /// FeedConfig1: 絶対座標モード
@@ -119,6 +126,25 @@ pub fn parse_absolute(d: &[u8; 6]) -> AbsoluteData {
         y: (d[3] as u16 | ((d[4] as u16 & 0xF0) << 4)) & 0x7FF,
         z: d[5] & 0x3F,
     }
+}
+
+/// 相対モードの 1 サンプル（パッド自身が計算した移動量）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Relative {
+    /// bit0〜2: ボタン（タップを有効にしている場合は、タップによるクリックもここに出る）
+    pub buttons: u8,
+    pub dx: i16,
+    /// 画面の座標系（下が +）に直してある。
+    pub dy: i16,
+    pub wheel: i8,
+}
+
+/// 相対モードのパケット（レジスタ 0x12〜0x15）を解釈する（QMK の `cirque_pinnacle_read_data` と同じ）。
+/// 1 バイト目の bit4/bit5 が X/Y の符号（9 ビットの符号つき）。
+pub fn parse_relative(d: &[u8; 4]) -> Relative {
+    let dx = if d[0] & 0x10 != 0 && d[1] != 0 { -(256 - d[1] as i16) } else { d[1] as i16 };
+    let dy = if d[0] & 0x20 != 0 && d[2] != 0 { 256 - d[2] as i16 } else { -(d[2] as i16) };
+    Relative { buttons: d[0] & 0x07, dx, dy, wheel: d[3] as i8 }
 }
 
 /// `read_absolute_checked` の結果。
@@ -216,6 +242,57 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
 
         self.enable_feed(true)?;
         Ok(Info { firmware_id, firmware_version })
+    }
+
+    /// 相対モードで初期化する（QMK の `cirque_pinnacle_init` の相対モード）。パッド自身が移動量を計算する。
+    ///
+    /// `taps` が true なら、パッドのタップ（クリック）判定を有効にする（`Relative::buttons` に出る）。
+    pub fn init_relative<D: DelayNs>(
+        &mut self,
+        delay: &mut D,
+        attenuation: Attenuation,
+        taps: bool,
+    ) -> Result<Info, Error<SPI::Error>> {
+        let firmware_id = self.read_reg(reg::FIRMWARE_ID)?;
+        let firmware_version = self.read_reg(reg::FIRMWARE_VERSION)?;
+        self.write_reg(reg::SYS_CONFIG1, SYS_RESET)?;
+        delay.delay_ms(30);
+        self.write_reg(reg::SYS_CONFIG1, 0x00)?;
+        delay.delay_us(50);
+        self.clear_flags_wait(delay)?;
+
+        // FeedConfig2（相対モード用の機能フラグ）: GlideExtend 無効 + IntelliMouse（4 バイト目にホイール）
+        // + 二次タップ無効 + スクロール無効。タップを使わないなら全タップ無効。
+        let mut f2 = FEED2_GLIDE_EXTEND_DISABLE | FEED2_INTELLIMOUSE | FEED2_SECONDARY_TAP_DISABLE | FEED2_SCROLL_DISABLE;
+        if !taps {
+            f2 |= FEED2_ALL_TAP_DISABLE;
+        }
+        self.write_reg(reg::FEED_CONFIG2, f2)?;
+        self.write_reg(reg::FEED_CONFIG1, 0x00)?; // 相対モード、Feed はまだ無効
+
+        if self.set_adc_attenuation(delay, attenuation)? {
+            self.calibrate(delay)?;
+        }
+        self.enable_feed(true)?;
+        Ok(Info { firmware_id, firmware_version })
+    }
+
+    /// 相対モードで、新しいサンプルがあれば読んで返す。
+    pub fn read_relative(&mut self) -> Result<Option<Relative>, Error<SPI::Error>> {
+        let st = self.read_reg(reg::STATUS1)?;
+        if st & (status::SW_DR | status::SW_CC) == 0 {
+            if st != 0 {
+                self.clear_flags()?;
+            }
+            return Ok(None);
+        }
+        let mut d = [0u8; 4];
+        self.read_regs(reg::PACKET_BYTE_0, &mut d)?;
+        self.clear_flags()?;
+        if st & status::SW_DR == 0 {
+            return Ok(None); // データではなく、コマンド完了だけ
+        }
+        Ok(Some(parse_relative(&d)))
     }
 
     /// フラグをクリアして、50µs 待つ（QMK と同じ）。
@@ -611,6 +688,53 @@ mod tests {
         let c = p.read_absolute_checked().unwrap().unwrap();
         assert!(c.disagreed);
         assert_eq!(c.data.x, 0x27F);
+    }
+
+    #[test]
+    fn parses_relative_packet_like_qmk() {
+        // 右へ +5。パッドの Y は上が + なので、符号ビットなしの 3 は画面では上へ（-3）
+        assert_eq!(parse_relative(&[0x00, 5, 3, 0]), Relative { buttons: 0, dx: 5, dy: -3, wheel: 0 });
+        // X が負（符号ビット + 補数）: -3、Y が負側（符号ビット）: 上へ
+        let r = parse_relative(&[0x10 | 0x20, 0xFD, 0xFB, 0xFF]);
+        assert_eq!((r.dx, r.dy, r.wheel), (-3, 5, -1));
+        // ボタン
+        assert_eq!(parse_relative(&[0x01, 0, 0, 0]).buttons, 1);
+        assert_eq!(parse_relative(&[0x07, 0, 0, 0]).buttons, 7);
+        // 符号ビットが立っていても、値が 0 なら 0
+        assert_eq!(parse_relative(&[0x30, 0, 0, 0]).dx, 0);
+    }
+
+    #[test]
+    fn init_relative_configures_relative_mode() {
+        let mut m = Mock::new();
+        m.regs[0] = 0x07;
+        m.regs[1] = 0x3A;
+        let mut p = Pinnacle::new(m);
+        p.init_relative(&mut NoDelay, Attenuation::X4, true).unwrap();
+        let m = p.release();
+        // タップ有効: 全タップ無効のビット（0x02）は立てない。IntelliMouse・GlideExtend 無効・二次タップ無効・スクロール無効
+        assert_eq!(m.regs[reg::FEED_CONFIG2 as usize], 0x01 | 0x04 | 0x08 | 0x10);
+        // 相対モード（データ形式ビットなし）で Feed 有効
+        assert_eq!(m.regs[reg::FEED_CONFIG1 as usize], FEED_ENABLE);
+        assert_eq!(m.calibrations, 1);
+    }
+
+    #[test]
+    fn init_relative_without_taps_disables_all_taps() {
+        let mut p = Pinnacle::new(Mock::new());
+        p.init_relative(&mut NoDelay, Attenuation::X4, false).unwrap();
+        assert_eq!(p.release().regs[reg::FEED_CONFIG2 as usize] & 0x02, 0x02);
+    }
+
+    #[test]
+    fn read_relative_reads_one_packet() {
+        let mut m = Mock::new();
+        m.regs[reg::STATUS1 as usize] = status::SW_DR;
+        m.regs[0x12..0x16].copy_from_slice(&[0x01, 7, 2, 0]);
+        let mut p = Pinnacle::new(m);
+        let r = p.read_relative().unwrap().unwrap();
+        assert_eq!((r.buttons, r.dx, r.dy), (1, 7, -2));
+        assert_eq!(p.read_relative().unwrap(), None, "flags were cleared");
     }
 
     #[test]

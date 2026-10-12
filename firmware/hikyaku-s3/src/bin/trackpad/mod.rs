@@ -1,5 +1,8 @@
 //! トラックパッド（Cirque Pinnacle, SPI）→ マウスレポート。`--features trackpad` のときだけ有効。
 //!
+//! 既定は**相対モード**（パッド自身が移動量とタップを計算する。QMK でも実績のある方式）。
+//! `trackpad-absolute` を付けると、絶対座標から移動量を自前で作る旧方式になる。
+//!
 //! 配線（docs/hardware/wiring.md）: SCK=GPIO12 / MISO=GPIO13 / MOSI=GPIO11 / SS=GPIO10 / DR=GPIO9（SPI2 の標準ピン + DR）。
 //! SPI モード 1、250kHz（1MHz では読み取りエラーが多かった）。疎通は実機で確認済み（2026-10-11）。
 
@@ -35,6 +38,7 @@ const SWEEP_SECS: u64 = 8;
 /// true の間、トラックパッドの動きをスクロールに変換する（キー押下中など。今は常に false）。
 pub static SCROLL_MODE: AtomicBool = AtomicBool::new(false);
 
+#[cfg(feature = "trackpad-absolute")]
 #[embassy_executor::task]
 pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'static>) {
     let dev = match ExclusiveDevice::new_no_delay(spi, cs) {
@@ -201,5 +205,79 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
         }
         // Pinnacle のサンプルレートは約 100Hz。それに合わせる。
         Timer::after(Duration::from_millis(10)).await;
+    }
+}
+
+/// 相対モード用のゲイン（1/256 単位）。パッドの移動量の単位は細かくないので、QMK の既定（4 倍）に近い値から始める。
+/// 速すぎる・遅すぎるときはここを調整する。
+#[cfg(not(feature = "trackpad-absolute"))]
+const REL_GAIN_Q8: u32 = 512;
+
+#[cfg(not(feature = "trackpad-absolute"))]
+#[embassy_executor::task]
+pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'static>) {
+    let dev = match ExclusiveDevice::new_no_delay(spi, cs) {
+        Ok(d) => d,
+        Err(_) => {
+            warn!("trackpad: chip select setup failed");
+            return;
+        }
+    };
+    let mut pad = Pinnacle::new(dev);
+    // 起動時はキャリブレーションが走る。パッドに触れないこと（補正が狂う）。
+    // タップはパッドに任せる（Relative::buttons に出る）。ADC 減衰は QMK の既定（4X）。
+    match pad.init_relative(&mut Delay::new(), Attenuation::X4, true) {
+        Ok(i) => info!("trackpad: relative mode, firmware id={:#04x} version={:#04x}", i.firmware_id, i.firmware_version),
+        Err(_) => {
+            warn!("trackpad: init failed (check wiring)");
+            return;
+        }
+    }
+
+    let cfg = Config { gain_q8: REL_GAIN_Q8, accel_ref: 0, ..Config::default() };
+    let mut pointer = Pointer::new(cfg);
+
+    // 診断用の集計（1 秒ごと）
+    let (mut packets, mut reports, mut errors) = (0u32, 0u32, 0u32);
+    let (mut sum_dx, mut sum_dy, mut max_step, mut clicks) = (0u32, 0u32, 0i32, 0u32);
+    let mut last_buttons = 0u8;
+    let mut last_log = Instant::now();
+
+    loop {
+        match pad.read_relative() {
+            Ok(Some(r)) => {
+                packets += 1;
+                sum_dx += r.dx.unsigned_abs() as u32;
+                sum_dy += r.dy.unsigned_abs() as u32;
+                max_step = max_step.max((r.dx as i32).abs()).max((r.dy as i32).abs());
+                if r.buttons & 1 != 0 && last_buttons & 1 == 0 {
+                    clicks += 1;
+                }
+                last_buttons = r.buttons;
+                #[cfg(feature = "trackpad-trace")]
+                info!("rel {} dx={} dy={} btn={} wheel={}", Instant::now().as_millis() as u32, r.dx, r.dy, r.buttons, r.wheel);
+                let now = Instant::now().as_millis() as u32;
+                if let Some(rep) =
+                    pointer.update_relative(now, r.dx as i32, r.dy as i32, r.buttons, SCROLL_MODE.load(Ordering::Relaxed))
+                {
+                    reports += 1;
+                    let _ = REPORTS.try_send(Report::Mouse(rep.to_bytes()));
+                }
+            }
+            Ok(None) => {}
+            Err(_) => errors += 1,
+        }
+        if last_log.elapsed() >= Duration::from_secs(1) {
+            if packets > 0 || errors > 0 {
+                info!(
+                    "trackpad: packets={} reports={} sum|dx|={} sum|dy|={} max|step|={} clicks={} errors={}",
+                    packets, reports, sum_dx, sum_dy, max_step, clicks, errors
+                );
+            }
+            (packets, reports, errors, sum_dx, sum_dy, max_step, clicks) = (0, 0, 0, 0, 0, 0, 0);
+            last_log = Instant::now();
+        }
+        // パッドは約 100Hz で出す。取りこぼさないよう、その倍の頻度で見る。
+        Timer::after(Duration::from_millis(5)).await;
     }
 }

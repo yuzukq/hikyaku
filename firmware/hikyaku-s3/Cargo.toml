@@ -14,8 +14,10 @@ selftest = []
 trackpad = ["dep:hikyaku-pinnacle", "dep:hikyaku-pointer", "dep:embedded-hal-bus"]
 # 生データ（tp <ms> <x> <y> <z>）をログに出す。tools の replay で再生して調整する。
 trackpad-trace = ["trackpad"]
+# 旧方式: 絶対座標から移動量を自前で作る（既定は相対モード）。
+trackpad-absolute = ["trackpad"]
 # 実験: 座標の上位ビットを使わず、下位バイトの前後差から位置を作る（キャリブレーション不足で上位ビットが遅れていた頃の回避策）。
-trackpad-lowbyte = ["trackpad"]
+trackpad-lowbyte = ["trackpad-absolute"]
 # 調査用: SPI の周波数を 8 秒ごとに切り替えて、読み取りの品質を周波数ごとに調べる。
 trackpad-sweep = ["trackpad-trace"]
 
