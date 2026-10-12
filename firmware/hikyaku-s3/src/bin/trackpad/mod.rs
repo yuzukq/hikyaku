@@ -222,7 +222,7 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
     let saved_z = pad.read_reg(reg::Z_IDLE).unwrap_or(0x1E);
     info!("selftest: start (ZIdle was {:#04x})", saved_z);
     for (mode, mname) in [(Mode::_1, 1u8)] {
-        for khz in [1000u32, 2000, 4000, 8000, 10000] {
+        for khz in [1000u32, 2000, 4000] {
             for setup_ns in [0u32, 10_000] {
                 let cfg = SpiConfig::default().with_frequency(Rate::from_khz(khz)).with_mode(mode);
                 if pad.spi_mut().bus_mut().apply_config(&cfg).is_err() {
@@ -232,7 +232,7 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
                 let (mut total, mut single_bad, mut burst_bad) = (0u32, 0u32, 0u32);
                 let (mut first_single, mut first_burst) = (None, None);
                 for &pat in &PATTERNS {
-                    for _ in 0..6 {
+                    for _ in 0..30 {
                         total += 1;
                         // 1 バイトの書き込み → 読み戻し
                         let _ = pad.write_reg(reg::Z_IDLE, pat);
