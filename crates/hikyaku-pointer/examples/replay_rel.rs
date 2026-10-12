@@ -6,6 +6,7 @@
 //!
 //! キー（省略時はファームの既定値）:
 //!   gain=2 swap=1 invx=1 invy=1 scroll_div=8   変換の設定
+//!   still=0                                    1 で静止中のぶれを抑えるフィルタ（trackpad-still-filter）を有効にする
 //!   scroll=0                                   1 でスクロールモードとして再生
 //!   quiet=1                                    1 行ごとの出力を省き、集計だけ出す
 //!   skip_fc=1                                  配線が外れているときのゴミ（raw=[fc, fc, fc]）を読み飛ばす
@@ -13,7 +14,7 @@
 //! 出力: 1 パケット 1 行（時刻・生バイト・dx/dy・出たレポート）と、末尾に集計
 //! （パケット数、ゼロパケット数、レポート数、移動量の合計、1 レポートの最大移動量、クリック数）。
 
-use hikyaku_pointer::relative::{parse_trace_line, Config, Relay};
+use hikyaku_pointer::relative::{parse_trace_line, Config, Relay, StillFilter};
 use std::{env, fs};
 
 fn main() {
@@ -30,6 +31,7 @@ fn main() {
             "invx" => cfg.invert_x = n != 0,
             "invy" => cfg.invert_y = n != 0,
             "scroll_div" => cfg.scroll_div = n as i32,
+            "still" => cfg.still = (n != 0).then_some(StillFilter::DEFAULT),
             "scroll" => scroll = n != 0,
             "quiet" => quiet = n != 0,
             "skip_fc" => skip_fc = n != 0,

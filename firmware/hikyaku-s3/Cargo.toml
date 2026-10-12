@@ -14,6 +14,9 @@ selftest = []
 trackpad = ["dep:hikyaku-pinnacle", "dep:hikyaku-pointer", "dep:embedded-hal-bus"]
 # 生データ（tp <ms> <x> <y> <z>）をログに出す。tools の replay で再生して調整する。
 trackpad-trace = ["trackpad"]
+# 静止中のぶれ（指を置いたままでの ±1〜2 の揺れ）を抑えるフィルタ（hikyaku_pointer::relative::StillFilter）。
+# 動き始めの反応は鈍らせない（1 パケットで大きく動いたときはそのまま通す）。既定は無効。
+trackpad-still-filter = ["trackpad"]
 # 起動時に SPI の読み書きの総当たりテスト（モード × 周波数 × CS 待ち）を行い、結果をログに出す。
 trackpad-selftest = ["trackpad"]
 # 旧方式: 絶対座標から移動量を自前で作る（既定は相対モード）。

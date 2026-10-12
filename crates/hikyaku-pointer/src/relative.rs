@@ -25,11 +25,106 @@ pub struct Config {
     pub gain: i32,
     /// スクロールモードで、ホイール 1 目盛りに相当する移動量。
     pub scroll_div: i32,
+    /// 静止中のぶれを抑えるフィルタ（[`StillFilter`]）。`None` で無効（ファームの既定）。
+    pub still: Option<StillFilter>,
 }
 
 impl Config {
     /// ファーム（`trackpad/mod.rs`）の 2026-10-13 時点の既定値。持ち主が実機で「調子が良い」と確認した設定。
-    pub const FIRMWARE_DEFAULT: Config = Config { swap_xy: true, invert_x: true, invert_y: true, gain: 2, scroll_div: 8 };
+    pub const FIRMWARE_DEFAULT: Config =
+        Config { swap_xy: true, invert_x: true, invert_y: true, gain: 2, scroll_div: 8, still: None };
+}
+
+/// 静止中のぶれを抑えるフィルタの設定（ファームでは `trackpad-still-filter` feature）。
+///
+/// 考え方: 指を止めているときのぶれは、パッドが報告する**位置**が ±1〜2 揺れているもので、移動量の合計は増えない
+/// （行って戻る）。そこで「静止」状態では移動量を足し込むだけにして、合計が `threshold` に届いたときに初めて、
+/// 溜めた分をまとめて出す（動きは失わない）。1 パケットで `threshold` 以上動いたら、溜めずにそのまま通す
+/// （スッと触ったときの反応を鈍らせない）。一度動き出したら「移動」状態になり、以降は 1:1 で通す
+/// （ゆっくり動かしても刻まない）。直近 [`STILL_WINDOW`] パケットの移動量の合計が `threshold` 未満になったら静止に戻す。
+/// パケットが `gap_ms` 途切れたら（指を離した）、静止に戻して溜めた分を捨てる。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StillFilter {
+    /// 静止とみなす移動量の上限（パッドの単位。相対モードの 1 単位はおよそ 0.15〜0.2mm）。
+    pub threshold: i32,
+    /// パケットがこの時間（ms）途切れたら、指が離れたとみなす。
+    pub gap_ms: u32,
+}
+
+impl StillFilter {
+    pub const DEFAULT: StillFilter = StillFilter { threshold: 3, gap_ms: 100 };
+}
+
+impl Default for StillFilter {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// 「移動」から「静止」に戻る判定に使う、直近のパケット数（パッドは約 100Hz なので約 80ms）。
+pub const STILL_WINDOW: usize = 8;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StillState {
+    moving: bool,
+    /// 静止中に溜めた移動量。
+    acc_x: i32,
+    acc_y: i32,
+    /// 移動中の直近の移動量（リングバッファ）と、その書き込み位置。
+    hist: [(i32, i32); STILL_WINDOW],
+    hist_pos: usize,
+    hist_len: usize,
+    last_ms: Option<u32>,
+}
+
+impl StillState {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn apply(&mut self, f: &StillFilter, now_ms: u32, sx: i32, sy: i32) -> (i32, i32) {
+        if let Some(last) = self.last_ms {
+            if now_ms.wrapping_sub(last) > f.gap_ms {
+                self.reset();
+            }
+        }
+        self.last_ms = Some(now_ms);
+        if self.moving {
+            self.record(sx, sy);
+            if self.hist_len == STILL_WINDOW {
+                let (wx, wy) = self.hist.iter().fold((0, 0), |a, d| (a.0 + d.0, a.1 + d.1));
+                if wx.abs() < f.threshold && wy.abs() < f.threshold {
+                    self.moving = false;
+                    self.acc_x = 0;
+                    self.acc_y = 0;
+                }
+            }
+            return (sx, sy);
+        }
+        // 静止中: 溜める。1 パケットで大きく動いたか、溜めた分がしきい値に届いたら、まとめて出して「移動」へ。
+        self.acc_x += sx;
+        self.acc_y += sy;
+        let big = sx.abs() >= f.threshold || sy.abs() >= f.threshold;
+        if big || self.acc_x.abs() >= f.threshold || self.acc_y.abs() >= f.threshold {
+            let out = (self.acc_x, self.acc_y);
+            self.acc_x = 0;
+            self.acc_y = 0;
+            self.moving = true;
+            self.hist_len = 0;
+            self.hist_pos = 0;
+            self.record(out.0, out.1);
+            return out;
+        }
+        (0, 0)
+    }
+
+    fn record(&mut self, sx: i32, sy: i32) {
+        self.hist[self.hist_pos] = (sx, sy);
+        self.hist_pos = (self.hist_pos + 1) % STILL_WINDOW;
+        if self.hist_len < STILL_WINDOW {
+            self.hist_len += 1;
+        }
+    }
 }
 
 impl Default for Config {
@@ -48,11 +143,27 @@ pub struct Relay {
     carry_wheel: i32,
     /// 最後に送ったボタン状態。
     last_buttons: u8,
+    still: StillState,
 }
 
 impl Relay {
     pub const fn new(cfg: Config) -> Self {
-        Self { cfg, carry_x: 0, carry_y: 0, carry_wheel: 0, last_buttons: 0 }
+        Self {
+            cfg,
+            carry_x: 0,
+            carry_y: 0,
+            carry_wheel: 0,
+            last_buttons: 0,
+            still: StillState {
+                moving: false,
+                acc_x: 0,
+                acc_y: 0,
+                hist: [(0, 0); STILL_WINDOW],
+                hist_pos: 0,
+                hist_len: 0,
+                last_ms: None,
+            },
+        }
     }
 
     pub fn config(&self) -> &Config {
@@ -76,9 +187,11 @@ impl Relay {
     /// - `now_ms`: 単調増加する時刻（ms）。時間を使う処理（フィルタ・タップ判定）のため。基本の変換では使わない。
     /// - `scroll_mode`: true の間は移動をホイールに変換する。
     pub fn push(&mut self, now_ms: u32, pkt: &Relative, scroll_mode: bool, emit: impl FnMut([u8; 5])) {
-        let _ = now_ms;
         let buttons = pkt.buttons & 1; // タップ = 左クリック
-        let (sx, sy) = self.orient(pkt.dx, pkt.dy);
+        let (mut sx, mut sy) = self.orient(pkt.dx, pkt.dy);
+        if let Some(f) = self.cfg.still {
+            (sx, sy) = self.still.apply(&f, now_ms, sx, sy);
+        }
         self.accumulate(sx, sy, scroll_mode);
         self.flush(buttons, emit);
     }
@@ -178,7 +291,100 @@ mod tests {
     }
 
     fn plain() -> Config {
-        Config { swap_xy: false, invert_x: false, invert_y: false, gain: 1, scroll_div: 8 }
+        Config { swap_xy: false, invert_x: false, invert_y: false, gain: 1, scroll_div: 8, still: None }
+    }
+
+    fn with_still() -> Config {
+        Config { still: Some(StillFilter::DEFAULT), ..plain() }
+    }
+
+    /// 10ms 間隔のパケット列を流して、出た移動量（x, y）の列を返す。
+    fn run_moves(relay: &mut Relay, deltas: &[(i16, i16)]) -> Vec<(i32, i32)> {
+        let mut out = Vec::new();
+        for (i, &(dx, dy)) in deltas.iter().enumerate() {
+            relay.push(i as u32 * 10, &pkt(0, dx, dy), false, |r| out.push((r[1] as i8 as i32, r[2] as i8 as i32)));
+        }
+        out
+    }
+
+    #[test]
+    fn still_filter_suppresses_resting_jitter() {
+        let mut r = Relay::new(with_still());
+        // 指を置いたまま: ±1〜2 が行って戻る
+        let jitter = [(1, 0), (-1, 1), (0, -1), (1, 1), (-2, 0), (1, -1), (0, 1), (-1, 0), (2, -1), (-1, 1), (0, 0), (-1, 0)];
+        assert!(run_moves(&mut r, &jitter).is_empty());
+    }
+
+    #[test]
+    fn still_filter_passes_a_quick_touch_through_unchanged() {
+        let mut r = Relay::new(with_still());
+        // スッと触る: 最初のパケットから大きい
+        assert_eq!(run_moves(&mut r, &[(6, -4), (9, -7), (3, -2)]), vec![(6, -4), (9, -7), (3, -2)]);
+    }
+
+    #[test]
+    fn still_filter_keeps_slow_motion_without_losing_distance() {
+        let mut r = Relay::new(with_still());
+        // 毎パケット 1 ずつ、ゆっくり右へ
+        let out = run_moves(&mut r, &[(1, 0); 12]);
+        // 最初はしきい値（3）まで溜めてまとめて出し、以降は 1:1
+        assert_eq!(out[0], (3, 0));
+        assert!(out[1..].iter().all(|&d| d == (1, 0)));
+        assert_eq!(out.iter().map(|d| d.0).sum::<i32>(), 12);
+    }
+
+    #[test]
+    fn still_filter_small_first_packet_is_not_lost_when_motion_follows() {
+        let mut r = Relay::new(with_still());
+        // 置いた瞬間の小さい動き → 直後に大きい動き: 合計が保たれる
+        assert_eq!(run_moves(&mut r, &[(1, -1), (5, 0)]), vec![(6, -1)]);
+    }
+
+    #[test]
+    fn still_filter_returns_to_still_after_motion_stops() {
+        let mut r = Relay::new(with_still());
+        let mut seq: Vec<(i16, i16)> = vec![(5, 5); 5]; // 動く
+        seq.extend([(1, 0), (-1, 0), (0, 1), (0, -1), (1, -1), (-1, 1), (1, 0), (-1, 0)]); // 止まる（窓いっぱい）
+        let tail: Vec<(i16, i16)> = vec![(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1)]; // 静止中のぶれ
+        seq.extend(&tail);
+        let out = run_moves(&mut r, &seq);
+        // 動いている間と、止まった直後の窓ぶんは 1:1 で通る。その後のぶれは出ない。
+        assert_eq!(out.len(), 5 + 8);
+    }
+
+    #[test]
+    fn still_filter_gap_resets_accumulation() {
+        let mut r = Relay::new(with_still());
+        let mut out = Vec::new();
+        r.push(0, &pkt(0, 2, 0), false, |x| out.push(x));
+        r.push(10, &pkt(0, 0, 2), false, |x| out.push(x));
+        // 指を離して（200ms 空いて）置き直す: 前の溜め（2, 2）は捨てられる
+        r.push(300, &pkt(0, 2, 0), false, |x| out.push(x));
+        assert!(out.is_empty());
+        r.push(310, &pkt(0, 1, 0), false, |x| out.push(x));
+        assert_eq!(out, vec![[0, 3, 0, 0, 0]]);
+    }
+
+    #[test]
+    fn still_filter_conserves_distance_up_to_residual() {
+        // 任意の列で、出した合計 = 入れた合計 − 溜め残し（|残し| < threshold）
+        let mut rng = Lcg(7);
+        for _ in 0..100 {
+            let mut r = Relay::new(with_still());
+            let (mut in_x, mut in_y, mut out_x, mut out_y) = (0i32, 0i32, 0i32, 0i32);
+            for i in 0..300u32 {
+                let d = |rng: &mut Lcg| (rng.next() % 9) as i16 - 4;
+                let (dx, dy) = (d(&mut rng), d(&mut rng));
+                in_x += dx as i32;
+                in_y += dy as i32;
+                r.push(i * 10, &pkt(0, dx, dy), false, |o| {
+                    out_x += o[1] as i8 as i32;
+                    out_y += o[2] as i8 as i32;
+                });
+            }
+            let (rx, ry) = (in_x - out_x, in_y - out_y);
+            assert!(rx.abs() < 3 && ry.abs() < 3, "residual ({rx}, {ry})");
+        }
     }
 
     #[test]

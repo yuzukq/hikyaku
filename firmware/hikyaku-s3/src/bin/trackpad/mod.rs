@@ -27,7 +27,7 @@ use hikyaku_pinnacle::{Attenuation, Pinnacle, RelativeOptions};
 #[cfg(feature = "trackpad-lowbyte")]
 use hikyaku_pointer::tracker::LowByteTracker;
 #[cfg(not(feature = "trackpad-absolute"))]
-use hikyaku_pointer::relative::{Config as RelayConfig, Relay};
+use hikyaku_pointer::relative::{Config as RelayConfig, Relay, StillFilter};
 #[cfg(feature = "trackpad-absolute")]
 use hikyaku_pointer::{Config, Pointer};
 use log::{info, warn};
@@ -309,7 +309,15 @@ const SCROLL_DIV: i32 = 8;
 /// 相対モードの変換の設定（上の定数をまとめたもの。`hikyaku_pointer::relative::Config::FIRMWARE_DEFAULT` と同じ値）。
 #[cfg(not(feature = "trackpad-absolute"))]
 fn relay_config() -> RelayConfig {
-    RelayConfig { swap_xy: SWAP_XY, invert_x: SCREEN_X_INVERT, invert_y: SCREEN_Y_INVERT, gain: REL_GAIN, scroll_div: SCROLL_DIV }
+    RelayConfig {
+        swap_xy: SWAP_XY,
+        invert_x: SCREEN_X_INVERT,
+        invert_y: SCREEN_Y_INVERT,
+        gain: REL_GAIN,
+        scroll_div: SCROLL_DIV,
+        // 静止中のぶれを抑える（`trackpad-still-filter`）。既定は無効。
+        still: cfg!(feature = "trackpad-still-filter").then_some(StillFilter::DEFAULT),
+    }
 }
 
 /// 相対モード（既定）。ZMK（Zephyr の input_pinnacle）や Cirque 公式の USB マウスのサンプルと同じく、
