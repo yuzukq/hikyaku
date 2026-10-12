@@ -62,6 +62,15 @@ rustup target add riscv32imc-unknown-none-elf                          # C3 を�
 
 既知の課題: `forward report` / `gatt read|write` のログが `info!` で出ていて冗長（打鍵のたびに出る）。次に書き込むときに `debug!` へ下げる。
 
+## 開発用 CLI（`tools/hk`）
+
+```fish
+tools/hk flash          # ビルド → S3 を待って書き込み（BOOT を押しながら挿す）
+tools/hk log            # S3 のログを表示（CH9102F 経由）
+tools/hk flash-log      # 書き込み → 元の構成に戻すのを待って → ログ表示
+FEATURES="trackpad trackpad-trace" tools/hk flash   # 機能を変えてビルド
+```
+
 ## 補助スクリプト（`tools/scripts/`）
 
 - `flash_when_ready.sh` … S3 が PC に現れたら、すぐ有線で書き込む（BOOT を押しながら挿すタイミングを気にしなくてよい）。失敗しても再試行する。

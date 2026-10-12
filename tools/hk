@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# hikyaku の開発用 CLI。
+#
+#   tools/hk build              ファームをビルドする
+#   tools/hk flash              ビルドして、S3 が PC に現れるのを待って書き込む（BOOT を押しながら挿す）
+#   tools/hk log [秒]           S3 のログを表示する（CH9102F 経由。省略時は Ctrl-C まで）
+#   tools/hk flash-log [秒]     書き込み → 元の構成に戻すのを待って → ログ表示、を続けて行う
+#
+# 環境変数:
+#   FEATURES  ビルドする機能（既定: trackpad）。例: FEATURES="trackpad trackpad-trace" tools/hk flash
+#   PORT      S3 の書き込みポート（既定: /dev/ttyACM0）
+#
+# 書き込みの手順:
+#   1. S3 から CH9102F の 5V とキーボードを外す（5V がつながったまま PC に挿すと電源がぶつかる）
+#   2. `tools/hk flash` を実行し、「待っています」と出たら BOOT を押しながら S3 を PC に挿す
+#   3. 書き込みが終わったら S3 を抜き、キーボードと CH9102F を元に戻す
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+FW="$ROOT/firmware/hikyaku-s3"
+ELF="$FW/target/xtensa-esp32s3-none-elf/release/hikyaku-s3"
+FEATURES="${FEATURES:-trackpad}"
+PORT="${PORT:-/dev/ttyACM0}"
+KEYFILE="$HOME/.config/hikyaku/ota.key"
+PEERFILE="$HOME/.config/hikyaku/ota.peer"
+
+export PATH="$HOME/.cargo/bin:$PATH"
+
+c_info() { printf '\033[36m%s\033[0m\n' "$*"; }
+c_ok() { printf '\033[32m%s\033[0m\n' "$*"; }
+c_err() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+
+# S3（Espressif の USB JTAG/serial）が見えているか
+s3_present() { lsusb 2>/dev/null | grep -q "303a:1001"; }
+# CH9102F（ログ用の UART 変換）が見えているか
+uart_present() { lsusb 2>/dev/null | grep -q "1a86:"; }
+# CH9102F のポート（/dev/serial/by-id があればそれを使う）
+uart_port() {
+  local p
+  p="$(ls /dev/serial/by-id/*1a86* 2>/dev/null | head -1 || true)"
+  [ -n "$p" ] && { echo "$p"; return; }
+  for p in /dev/ttyACM* /dev/ttyUSB*; do
+    [ -e "$p" ] || continue
+    if udevadm info -q property -n "$p" 2>/dev/null | grep -q "ID_VENDOR_ID=1a86"; then
+      echo "$p"
+      return
+    fi
+  done
+}
+
+cmd_build() {
+  [ -f "$HOME/export-esp.sh" ] || { c_err "~/export-esp.sh がありません（espup install が必要）"; exit 1; }
+  # shellcheck disable=SC1091
+  . "$HOME/export-esp.sh"
+  local key="" peer=""
+  [ -f "$KEYFILE" ] && key="$(cat "$KEYFILE")"
+  [ -f "$PEERFILE" ] && peer="$(cat "$PEERFILE")"
+  c_info "ビルド中（features: $FEATURES）"
+  (cd "$FW" && HIKYAKU_OTA_KEY="$key" HIKYAKU_OTA_PEER="$peer" cargo build --release --features "$FEATURES")
+  c_ok "ビルド完了"
+}
+
+cmd_flash() {
+  cmd_build
+  if uart_present && ! s3_present; then
+    c_info "注意: CH9102F がつながっています。S3 の 5V から外してから S3 を PC に挿してください。"
+  fi
+  c_info "S3 を待っています… BOOT を押しながら S3 を PC に挿してください（Ctrl-C で中止）"
+  local tries=0
+  while true; do
+    if s3_present && [ -e "$PORT" ]; then
+      if espflash flash --port "$PORT" --partition-table "$FW/partitions.csv" "$ELF"; then
+        c_ok "書き込み完了。S3 を抜いて、キーボードと CH9102F を元に戻してください。"
+        return 0
+      fi
+      tries=$((tries + 1))
+      if [ "$tries" -ge 5 ]; then
+        c_err "書き込みに 5 回失敗しました。BOOT を押しながら挿し直して、もう一度実行してください。"
+        exit 1
+      fi
+      c_info "書き込みに失敗。BOOT を押しながら挿し直してください（再試行 $tries/5）"
+      # 今のデバイスが消えるまで待つ
+      while s3_present; do sleep 0.2; done
+    fi
+    sleep 0.1
+  done
+}
+
+cmd_log() {
+  local secs="${1:-0}"
+  c_info "CH9102F を待っています…（S3 にキーボードと CH9102F を戻し、CH9102F を PC に挿してください）"
+  local port=""
+  while [ -z "$port" ]; do
+    port="$(uart_port || true)"
+    [ -z "$port" ] && sleep 0.2
+  done
+  sleep 0.3
+  c_info "ログ: $port（Ctrl-C で終了）"
+  if [ "$secs" -gt 0 ]; then
+    python3 "$ROOT/tools/scripts/uart_cap.py" "$secs" "$port"
+  else
+    python3 "$ROOT/tools/scripts/uart_cap.py" 86400 "$port"
+  fi
+}
+
+case "${1:-}" in
+  build) cmd_build ;;
+  flash) cmd_flash ;;
+  log) shift; cmd_log "${1:-0}" ;;
+  flash-log) shift; cmd_flash; cmd_log "${1:-0}" ;;
+  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
