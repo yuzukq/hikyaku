@@ -339,7 +339,7 @@ async fn main(spawner: Spawner) -> ! {
         };
         let spi = Spi::new(
             peripherals.SPI2,
-            SpiConfig::default().with_frequency(Rate::from_khz(2000)).with_mode(Mode::_1),
+            SpiConfig::default().with_frequency(Rate::from_khz(4000)).with_mode(Mode::_1),
         )
         .unwrap()
         .with_sck(peripherals.GPIO12)

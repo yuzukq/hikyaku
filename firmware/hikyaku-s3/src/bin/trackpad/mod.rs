@@ -4,7 +4,7 @@
 //! `trackpad-absolute` を付けると、絶対座標から移動量を自前で作る旧方式になる。
 //!
 //! 配線（docs/hardware/wiring.md）: SCK=GPIO12 / MISO=GPIO13 / MOSI=GPIO11 / SS=GPIO10 / DR=GPIO9（SPI2 の標準ピン + DR）。
-//! SPI モード 1、**2MHz**。このパッドは SPI のクロックが低い（1MHz 以下）と MSB を取り違える。
+//! SPI モード 1、**4MHz**（Cirque 公式サンプルは 10MHz、2・4MHz で読み戻しテスト 0 エラー）。このパッドは SPI のクロックが低い（1MHz 以下）と MSB を取り違える。
 //! レジスタの読み戻しテストで、2MHz・4MHz は 0 エラー、250k〜1MHz は約半分が誤りと確認した（2026-10-13）。
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -22,7 +22,7 @@ use esp_hal::{
     spi::{master::Config as SpiConfig, Mode},
     time::Rate,
 };
-use hikyaku_pinnacle::{Attenuation, Pinnacle};
+use hikyaku_pinnacle::{Attenuation, Pinnacle, RelativeOptions};
 #[cfg(feature = "trackpad-lowbyte")]
 use hikyaku_pointer::tracker::LowByteTracker;
 use hikyaku_pointer::{Config, Pointer};
@@ -260,7 +260,7 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
         }
     }
     // 元に戻す
-    let cfg = SpiConfig::default().with_frequency(Rate::from_khz(2000)).with_mode(Mode::_1);
+    let cfg = SpiConfig::default().with_frequency(Rate::from_khz(4000)).with_mode(Mode::_1);
     let _ = pad.spi_mut().bus_mut().apply_config(&cfg);
     pad.set_cs_setup_ns(0);
     let _ = pad.write_reg(reg::Z_IDLE, saved_z);
@@ -270,11 +270,23 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
     info!("selftest: done");
 }
 
-/// 相対モード用のゲイン（1/256 単位）。パッドの移動量の単位は細かい（絶対座標と同じで 1mm あたり約 66）ので、
-/// 1mm の指の動きがカーソルの 25〜30 カウント程度になる 0.4 倍から始める。速すぎる・遅すぎるときはここを調整する。
+/// 相対モードの設定。向きが合わないときはここを変える（基板裏の印字が読める向きを「上」とする）。
+/// 既定は Cirque 公式の USB マウスのサンプルと同じ（Y を反転、タップ有効、感度 4X）。
 #[cfg(not(feature = "trackpad-absolute"))]
-const REL_GAIN_Q8: u32 = 100;
+const REL_OPTIONS: RelativeOptions = RelativeOptions {
+    sensitivity: Attenuation::X4,
+    primary_tap: true,
+    invert_x: false,
+    invert_y: true,
+    swap_xy: false,
+};
 
+/// スクロールモードで、ホイール 1 目盛りに相当する移動量。
+#[cfg(not(feature = "trackpad-absolute"))]
+const SCROLL_DIV: i32 = 8;
+
+/// 相対モード（既定）。ZMK（Zephyr の input_pinnacle）や Cirque 公式の USB マウスのサンプルと同じく、
+/// **パッドが計算した移動量を 1:1 でそのまま**マウスレポートにする（加工しない。加速は OS に任せる）。
 #[cfg(not(feature = "trackpad-absolute"))]
 #[embassy_executor::task]
 pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'static>) {
@@ -286,12 +298,12 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
         }
     };
     let mut pad = Pinnacle::new(dev);
+
     #[cfg(feature = "trackpad-selftest")]
     selftest(&mut pad);
 
     // 起動時はキャリブレーションが走る。パッドに触れないこと（補正が狂う）。
-    // タップはパッドに任せる（Relative::buttons に出る）。ADC 減衰は QMK の既定（4X）。
-    match pad.init_relative(&mut Delay::new(), Attenuation::X4, true) {
+    match pad.init_relative(&mut Delay::new(), REL_OPTIONS) {
         Ok(i) => info!("trackpad: relative mode, firmware id={:#04x} version={:#04x}", i.firmware_id, i.firmware_version),
         Err(_) => {
             warn!("trackpad: init failed (check wiring)");
@@ -299,34 +311,53 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
         }
     }
 
-    let cfg = Config { gain_q8: REL_GAIN_Q8, accel_ref: 0, ..Config::default() };
-    let mut pointer = Pointer::new(cfg);
+    // i8 に収まらない分は次に持ち越す
+    let (mut carry_x, mut carry_y, mut carry_wheel) = (0i32, 0i32, 0i32);
+    let mut last_buttons = 0u8;
 
     // 診断用の集計（1 秒ごと）
     let (mut packets, mut reports, mut errors) = (0u32, 0u32, 0u32);
-    let (mut sum_dx, mut sum_dy, mut max_step, mut clicks) = (0u32, 0u32, 0i32, 0u32);
-    let mut last_buttons = 0u8;
+    let (mut sum_dx, mut sum_dy, mut max_step, mut clicks) = (0i32, 0i32, 0i32, 0u32);
     let mut last_log = Instant::now();
 
     loop {
         match pad.read_relative() {
             Ok(Some(r)) => {
                 packets += 1;
-                sum_dx += r.dx.unsigned_abs() as u32;
-                sum_dy += r.dy.unsigned_abs() as u32;
+                sum_dx += r.dx as i32;
+                sum_dy += r.dy as i32;
                 max_step = max_step.max((r.dx as i32).abs()).max((r.dy as i32).abs());
                 if r.buttons & 1 != 0 && last_buttons & 1 == 0 {
                     clicks += 1;
                 }
-                last_buttons = r.buttons;
                 #[cfg(feature = "trackpad-trace")]
                 info!("rel {} raw={:02x?} dx={} dy={}", Instant::now().as_millis() as u32, r.raw, r.dx, r.dy);
-                let now = Instant::now().as_millis() as u32;
-                if let Some(rep) =
-                    pointer.update_relative(now, r.dx as i32, r.dy as i32, r.buttons, SCROLL_MODE.load(Ordering::Relaxed))
-                {
+
+                let buttons = r.buttons & 1; // タップ = 左クリック
+                if SCROLL_MODE.load(Ordering::Relaxed) {
+                    carry_wheel += -(r.dy as i32);
+                } else {
+                    carry_x += r.dx as i32;
+                    carry_y += r.dy as i32;
+                }
+                let wheel = (carry_wheel / SCROLL_DIV).clamp(-127, 127);
+                carry_wheel -= wheel * SCROLL_DIV;
+                // 1 パケットぶんを送り切る（大きいときは 127 ずつ分けて送る）
+                loop {
+                    let x = carry_x.clamp(-127, 127);
+                    let y = carry_y.clamp(-127, 127);
+                    if x == 0 && y == 0 && wheel == 0 && buttons == last_buttons {
+                        break;
+                    }
+                    carry_x -= x;
+                    carry_y -= y;
+                    let w = if wheel != 0 && x == 0 && y == 0 { wheel } else { 0 };
+                    let _ = REPORTS.try_send(Report::Mouse([buttons, x as i8 as u8, y as i8 as u8, w as i8 as u8, 0]));
                     reports += 1;
-                    let _ = REPORTS.try_send(Report::Mouse(rep.to_bytes()));
+                    last_buttons = buttons;
+                    if carry_x == 0 && carry_y == 0 {
+                        break;
+                    }
                 }
             }
             Ok(None) => {}
@@ -335,7 +366,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, dr: Input<'st
         if last_log.elapsed() >= Duration::from_secs(1) {
             if packets > 0 || errors > 0 {
                 info!(
-                    "trackpad: packets={} reports={} sum|dx|={} sum|dy|={} max|step|={} clicks={} errors={}",
+                    "trackpad: packets={} reports={} sum(dx,dy)=({},{}) max|step|={} clicks={} errors={}",
                     packets, reports, sum_dx, sum_dy, max_step, clicks, errors
                 );
             }
