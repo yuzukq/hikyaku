@@ -62,6 +62,12 @@ rustup target add riscv32imc-unknown-none-elf                          # C3 を�
 
 既知の課題: `forward report` / `gatt read|write` のログが `info!` で出ていて冗長（打鍵のたびに出る）。次に書き込むときに `debug!` へ下げる。
 
+## 補助スクリプト（`tools/scripts/`）
+
+- `flash_when_ready.sh` … S3 が PC に現れたら、すぐ有線で書き込む（BOOT を押しながら挿すタイミングを気にしなくてよい）。失敗しても再試行する。
+- `capture_when_ready.sh <秒数> <出力>` … CH9102F が現れたら S3 のログを一定時間取る。
+- `uart_cap.py <秒数> [ポート]` … ログのキャプチャ本体。`ble_rx.py` … PC を BLE の受信側にして、届くレポートを表示する。
+
 ## 書き込み（S3）
 
 **OTA を使えば、以降は抜き差し・BOOT 操作が要らない → [ota.md](ota.md)。** 以下は有線で書き込む場合（最初の 1 回、または復旧）。
