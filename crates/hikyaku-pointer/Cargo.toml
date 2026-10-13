@@ -2,7 +2,7 @@
 name = "hikyaku-pointer"
 version = "0.1.0"
 edition = "2021"
-description = "Trackpad -> mouse reports. relative: Pinnacle relative-mode packets -> reports (orientation, gain, carry, split); legacy absolute path (move, accel, tap, drag, scroll). no_std"
+description = "Trackpad -> mouse reports: Pinnacle relative-mode packets -> reports (orientation, gain, carry, split, still filter, soft tap). no_std"
 
 [dependencies]
 hikyaku-pinnacle = { path = "../hikyaku-pinnacle" }

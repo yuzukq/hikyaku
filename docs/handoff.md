@@ -40,12 +40,12 @@
 
 ### 整理の提案（消すのは持ち主の判断。ここでは提案だけ）
 
-- **絶対座標の経路を消す**: `trackpad-absolute` / `trackpad-lowbyte` / `trackpad-sweep`（`trackpad/mod.rs` の前半 約 200 行）、
+- **絶対座標の経路を消す** → **2026-10-13 に削除済み**（持ち主の判断）。`trackpad-absolute` / `trackpad-lowbyte` / `trackpad-sweep`、
   `hikyaku-pointer` の `Pointer`・`tracker`・`examples/replay.rs`、`hikyaku-pinnacle` の `init` / `read_absolute(_checked)` / `parse_absolute` / `Checked`。
-  相対モードに決めてから使っておらず、「丸いパッドを画面に対応させない」方針とも合わない。履歴は git に残る（消す直前にタグ `absolute-last` を打つ）。
-  残すなら `trackpad-selftest`・`trackpad-trace`（診断に有用）。`hikyaku-pointer` は `relative` の置き場として残す（クレート名は後で `hikyaku-relay` などに変えてもよい）。
-- **ビルドの警告**: ビルドできないので一覧は出せない。読んだ範囲では、絶対座標の経路の集計変数（`polls`・`dr_high`・`msb_x`・`msb_y`）が
-  数えるだけでログに出ていないので、そこが警告になっているはず。上の削除で消える。
+  消す前の状態はタグ `absolute-mode-last`（`main` の 82ea5c0）に残っている。`trackpad-selftest`・`trackpad-trace` は残した。
+  `hikyaku-pointer` は `relative` の置き場として残した（クレート名の変更はしていない）。
+- **ビルドの警告**: 実機の PC でビルドして確認した（2026-10-13）。削除後に残るのは `main.rs` の 2 件だけ（不要な `unsafe` ブロック、
+  読まれない `battery` フィールド）。どちらもこの PR より前からある。
 - `SCROLL_MODE` は誰も true にしていない（Phase 5 の「キー押下中はスクロール」用）。使うときは `usb_host` のキーレポートで特定キーを見て立てる。
 
 ## 作業のルール（必ず守る）
@@ -112,7 +112,6 @@ feature を外したビルドの方が悪く感じた、という報告がある
    動き始めの反応を鈍らせないことが条件（持ち主は「スッと触ったときの反応」を重視している）。
 3. **自前のタップ判定**（feature の裏、パッド側のタップと切り替え）
    スワイプ中の誤クリックを減らす。相対モードのパケットには指の有無が直接ないので、パケットが来ている／来ていない時間と移動量で判定する案。
-   `crates/hikyaku-pointer` に絶対座標用のタップ判定の実装があるので参考にする。
 4. **タッチ感度（ADC 減衰）を feature で選べるようにする**（例: `trackpad-sens-2x`、`trackpad-sens-1x`）。既定は 4X のまま。
 5. **整理**: 使っていない絶対座標の経路（`trackpad-absolute`、`trackpad-lowbyte`、`trackpad-sweep`）と `hikyaku-pointer` の扱いを、
    消すか残すか提案する（**消すのは PR で提案するだけ**にして、持ち主の判断を待つ）。ビルドの警告を減らす。

@@ -14,7 +14,7 @@ selftest = []
 usb-trace = []
 # トラックパッド（SPI）。コネクタが届くまで既定では無効。
 trackpad = ["dep:hikyaku-pinnacle", "dep:hikyaku-pointer", "dep:embedded-hal-bus"]
-# 生データ（相対モード: `rel <ms> raw=[b0, b1, b2] dx= dy=`、絶対座標: `tp <ms> <x> <y> <z>`）をログに出す。
+# 生データ（`rel <ms> raw=[b0, b1, b2] dx= dy=`）をログに出す。
 # ホストで再生できる（`cargo run -p hikyaku-pointer --example replay_rel -- <log>`。tools/traces/README.md）。
 trackpad-trace = ["trackpad"]
 # 静止中のぶれ（指を置いたままでの ±1〜2 の揺れ）を抑えるフィルタ（hikyaku_pointer::relative::StillFilter）。
@@ -30,12 +30,6 @@ trackpad-sens-2x = ["trackpad"]
 trackpad-sens-3x = ["trackpad"]
 # 起動時に SPI の読み書きの総当たりテスト（モード × 周波数 × CS 待ち）を行い、結果をログに出す。
 trackpad-selftest = ["trackpad"]
-# 旧方式: 絶対座標から移動量を自前で作る（既定は相対モード）。
-trackpad-absolute = ["trackpad"]
-# 実験: 座標の上位ビットを使わず、下位バイトの前後差から位置を作る（キャリブレーション不足で上位ビットが遅れていた頃の回避策）。
-trackpad-lowbyte = ["trackpad-absolute"]
-# 調査用: SPI の周波数を 8 秒ごとに切り替えて、読み取りの品質を周波数ごとに調べる。
-trackpad-sweep = ["trackpad-trace"]
 
 [dependencies]
 esp-hal = { version = "~1.2.2", features = ["esp32s3", "log-04", "unstable"] }

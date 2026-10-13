@@ -10,7 +10,7 @@ firmware/
 crates/hikyaku-hid/      no_std。ブートキーボードレポートの解釈・Usage 名（ホストでテスト可）
 crates/hikyaku-pinnacle/ no_std。Cirque Pinnacle の SPI ドライバ（RAP, embedded-hal 1.0。SPI モックで単体テスト）
 crates/hikyaku-pointer/  no_std。`relative`: 相対モードのパケット → マウスレポート（向き・倍率・持ち越し・分割。静止フィルタ・自前タップ判定）。
-                         ホストで実機ログを再生してテストできる。`Pointer`/`tracker`: 旧方式（絶対座標 → マウスレポート）
+                         ホストで実機ログを再生してテストできる。旧方式（絶対座標）はタグ `absolute-mode-last` に残っている
 tools/hid-probe/     PC 用: hidraw の一覧・記述子ダンプ・入力解析・ESP への中継（bridge）
 tools/scripts/       検証用スクリプト（ble_rx.py, uart_cap.py）
 ```
