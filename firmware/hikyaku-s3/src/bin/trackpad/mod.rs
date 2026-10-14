@@ -172,13 +172,18 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
 
     // 起動時はキャリブレーションが走る。パッドに触れないこと（補正が狂う）。
     match pad.init_relative(&mut Delay::new(), REL_OPTIONS) {
-        Ok(i) => info!("trackpad: relative mode, firmware id={:#04x} version={:#04x}", i.firmware_id, i.firmware_version),
+        Ok(i) => {
+            info!("trackpad: relative mode, firmware id={:#04x} version={:#04x}", i.firmware_id, i.firmware_version);
+            crate::led::set(crate::led::GREEN); // キャリブレーション完了。触ってよい
+        }
         Err(hikyaku_pinnacle::Error::BadId(id)) => {
+            crate::led::set(crate::led::BLUE);
             // 配線（MISO・電源・GND・CS）が外れていると、0x00 や 0xFC が読める。ゴミを送らないよう、ここで止める。
             warn!("trackpad: wrong firmware id {:#04x} (expected 0x07). Check the 12-pin FFC / wiring. Trackpad disabled.", id);
             return;
         }
         Err(_) => {
+            crate::led::set(crate::led::BLUE);
             warn!("trackpad: init failed (check wiring)");
             return;
         }
@@ -192,9 +197,14 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
     let (mut packets, mut reports, mut errors) = (0u32, 0u32, 0u32);
     let (mut sum_dx, mut sum_dy, mut max_step, mut clicks) = (0i32, 0i32, 0i32, 0u32);
     let mut last_buttons = 0u8;
+    // 送れずに捨てたレポート数（BLE 側のキューがいっぱい）と、読み取りの間隔の最大（タスクが止まっていないか）
+    let (mut dropped, mut max_gap_ms) = (0u32, 0u64);
+    let mut last_poll = Instant::now();
     let mut last_log = Instant::now();
 
     loop {
+        max_gap_ms = max_gap_ms.max(last_poll.elapsed().as_millis());
+        last_poll = Instant::now();
         let now = Instant::now().as_millis() as u32;
         // 出すレポートを BLE へ流し、集計する
         let mut emit = |r: [u8; 5]| {
@@ -202,7 +212,9 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
                 clicks += 1;
             }
             last_buttons = r[0];
-            let _ = REPORTS.try_send(Report::Mouse(r));
+            if REPORTS.try_send(Report::Mouse(r)).is_err() {
+                dropped += 1;
+            }
             reports += 1;
         };
         match pad.read_relative() {
@@ -221,11 +233,12 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
         if last_log.elapsed() >= Duration::from_secs(1) {
             if packets > 0 || errors > 0 {
                 info!(
-                    "trackpad: packets={} reports={} sum(dx,dy)=({},{}) max|step|={} clicks={} errors={}",
-                    packets, reports, sum_dx, sum_dy, max_step, clicks, errors
+                    "trackpad: packets={} reports={} dropped={} max_gap_ms={} sum(dx,dy)=({},{}) max|step|={} clicks={} errors={}",
+                    packets, reports, dropped, max_gap_ms, sum_dx, sum_dy, max_step, clicks, errors
                 );
             }
             (packets, reports, errors, sum_dx, sum_dy, max_step, clicks) = (0, 0, 0, 0, 0, 0, 0);
+            (dropped, max_gap_ms) = (0, 0);
             last_log = Instant::now();
         }
         // パッドは約 100Hz で出す。取りこぼさないよう、その倍の頻度で見る。

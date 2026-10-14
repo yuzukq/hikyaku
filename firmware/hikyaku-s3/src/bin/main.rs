@@ -40,6 +40,7 @@ use esp_backtrace as _;
 extern crate alloc;
 
 mod bond_store;
+mod led;
 mod ota;
 #[cfg(feature = "trackpad")]
 mod trackpad;
@@ -333,6 +334,11 @@ async fn main(spawner: Spawner) -> ! {
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
+
+    // オンボードの RGB LED（GPIO48）。トラックパッドの準備ができるまで赤（触らない）、できたら緑、パッドが見つからなければ青。
+    led::init(peripherals.RMT, peripherals.GPIO48);
+    #[cfg(feature = "trackpad")]
+    led::set(led::RED);
 
     #[cfg(feature = "trackpad")]
     {
