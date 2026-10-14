@@ -347,9 +347,14 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
     // 診断用の集計（1 秒ごと）
     let (mut packets, mut reports, mut errors) = (0u32, 0u32, 0u32);
     let (mut sum_dx, mut sum_dy, mut max_step, mut clicks) = (0i32, 0i32, 0i32, 0u32);
+    // 送れずに捨てたレポート数（BLE 側のキューがいっぱい）と、読み取りの間隔の最大（タスクが止まっていないか）
+    let (mut dropped, mut max_gap_ms) = (0u32, 0u64);
+    let mut last_poll = Instant::now();
     let mut last_log = Instant::now();
 
     loop {
+        max_gap_ms = max_gap_ms.max(last_poll.elapsed().as_millis());
+        last_poll = Instant::now();
         match pad.read_relative() {
             Ok(Some(r)) => {
                 packets += 1;
@@ -388,7 +393,9 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
                     carry_x -= x;
                     carry_y -= y;
                     let w = if wheel != 0 && x == 0 && y == 0 { wheel } else { 0 };
-                    let _ = REPORTS.try_send(Report::Mouse([buttons, x as i8 as u8, y as i8 as u8, w as i8 as u8, 0]));
+                    if REPORTS.try_send(Report::Mouse([buttons, x as i8 as u8, y as i8 as u8, w as i8 as u8, 0])).is_err() {
+                        dropped += 1;
+                    }
                     reports += 1;
                     last_buttons = buttons;
                     if carry_x == 0 && carry_y == 0 {
@@ -402,11 +409,12 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
         if last_log.elapsed() >= Duration::from_secs(1) {
             if packets > 0 || errors > 0 {
                 info!(
-                    "trackpad: packets={} reports={} sum(dx,dy)=({},{}) max|step|={} clicks={} errors={}",
-                    packets, reports, sum_dx, sum_dy, max_step, clicks, errors
+                    "trackpad: packets={} reports={} dropped={} max_gap_ms={} sum(dx,dy)=({},{}) max|step|={} clicks={} errors={}",
+                    packets, reports, dropped, max_gap_ms, sum_dx, sum_dy, max_step, clicks, errors
                 );
             }
             (packets, reports, errors, sum_dx, sum_dy, max_step, clicks) = (0, 0, 0, 0, 0, 0, 0);
+            (dropped, max_gap_ms) = (0, 0);
             last_log = Instant::now();
         }
         // パッドは約 100Hz で出す。取りこぼさないよう、その倍の頻度で見る。

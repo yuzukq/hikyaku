@@ -35,12 +35,14 @@ while time.time() - t < dur:
             if not is_ch9102(port):
                 time.sleep(0.5)
                 continue
-            # 開く前に DTR/RTS を決めておく（S3 の USB シリアル/JTAG では、開くときに切り替わるとリセットされる）
-            s = serial.Serial(None, 115200, timeout=0.5, dsrdtr=False, rtscts=False)
-            s.port = port
-            s.dtr = False
-            s.rts = False
-            s.open()
+            if VENDOR == "303a":
+                # S3 の USB シリアル/JTAG: DTR/RTS を切り替えるとチップがリセットされる（DTR を先に落とすと RTS だけが残り、
+                # リセットになる）。開いたときのまま（両方 High = リセットしない）にして触らない。
+                s = serial.Serial(port, 115200, timeout=0.5)
+            else:
+                s = serial.Serial(port, 115200, timeout=0.5, dsrdtr=False, rtscts=False)
+                s.dtr = False
+                s.rts = False
         d = s.read(4096)
         if d:
             sys.stdout.write("%5.1f " % (time.time() - t) + d.decode(errors="replace").replace("\x1b", ""))
