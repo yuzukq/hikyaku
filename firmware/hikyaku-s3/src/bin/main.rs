@@ -180,6 +180,7 @@ fn media_report(buf: &[u8]) -> Option<Report> {
 }
 
 /// USB ホスト：つながったキーボード（ブートプロトコル）を読んで REPORTS に流す。
+#[cfg_attr(feature = "usb-log", allow(dead_code))]
 #[embassy_executor::task]
 async fn usb_host(usb: Usb<'static>) {
     static BUS_STATE: BusState = BusState::new();
@@ -323,7 +324,8 @@ async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
-    let peripherals = esp_hal::init(config);
+    #[allow(unused_mut)] // `trackpad-probe` でピンを一時的に借りるため
+    let mut peripherals = esp_hal::init(config);
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 66320);
 
@@ -337,6 +339,82 @@ async fn main(spawner: Spawner) -> ! {
             spi::{master::{Config as SpiConfig, Spi}, Mode},
             time::Rate,
         };
+        // 診断（`trackpad-probe`）: SPI を使う前に、DR と MISO のピンの状態を読む。テスターがなくても配線の切り分けができる。
+        #[cfg(feature = "trackpad-probe")]
+        {
+            let d = esp_hal::delay::Delay::new();
+            // パッドは電源投入後のキャリブレーションが終わると DR を High にする（SPI でフラグを消すまで High のまま）。
+            d.delay_millis(300);
+            let mut cs = Output::new(peripherals.GPIO10.reborrow(), Level::High, OutputConfig::default());
+            let dr = Input::new(peripherals.GPIO9.reborrow(), InputConfig::default().with_pull(Pull::Down)).is_high();
+            let mut miso = |pull: Pull| {
+                let p = Input::new(peripherals.GPIO13.reborrow(), InputConfig::default().with_pull(pull));
+                d.delay_micros(200);
+                p.is_high()
+            };
+            let (hi_up, hi_down) = (miso(Pull::Up), miso(Pull::Down));
+            cs.set_low();
+            d.delay_micros(50);
+            let (lo_up, lo_down) = (miso(Pull::Up), miso(Pull::Down));
+            cs.set_high();
+            info!(
+                "probe: DR={} | MISO with CS high: pull-up={} pull-down={} | MISO with CS low: pull-up={} pull-down={}",
+                dr as u8, hi_up as u8, hi_down as u8, lo_up as u8, lo_down as u8
+            );
+            drop(cs);
+
+            // 短絡の検査: GPIO9〜13 を全部プルダウン（またはプルアップ）の入力にし、1 本ずつ逆のレベルで駆動して、
+            // ほかのピンがつられるかを見る。つられたピン同士は短絡している。駆動したピン自身が駆動したレベルにならなければ、
+            // GND（または 3V3）と直接つながっている。駆動は数十µs だけ。
+            use esp_hal::gpio::Flex;
+            let mut pins = [
+                Flex::new(peripherals.GPIO9.reborrow()),
+                Flex::new(peripherals.GPIO10.reborrow()),
+                Flex::new(peripherals.GPIO11.reborrow()),
+                Flex::new(peripherals.GPIO12.reborrow()),
+                Flex::new(peripherals.GPIO13.reborrow()),
+            ];
+            const NAMES: [u8; 5] = [9, 10, 11, 12, 13];
+            for (pull, drive_high) in [(Pull::Down, true), (Pull::Up, false)] {
+                for p in pins.iter_mut() {
+                    p.set_output_enable(false);
+                    p.apply_input_config(&InputConfig::default().with_pull(pull));
+                    p.set_input_enable(true);
+                }
+                d.delay_micros(200);
+                let mut base = [0u8; 5];
+                for (b, p) in base.iter_mut().zip(pins.iter()) {
+                    *b = p.is_high() as u8;
+                }
+                info!("probe: pull-{} idle levels GPIO9..13 = {:?}", if drive_high { "down" } else { "up" }, base);
+                for i in 0..pins.len() {
+                    if drive_high {
+                        pins[i].set_high();
+                    } else {
+                        pins[i].set_low();
+                    }
+                    pins[i].set_output_enable(true);
+                    d.delay_micros(20);
+                    let mut got = [0u8; 5];
+                    for (g, p) in got.iter_mut().zip(pins.iter()) {
+                        *g = p.is_high() as u8;
+                    }
+                    pins[i].set_output_enable(false);
+                    d.delay_micros(50);
+                    info!(
+                        "probe: pull-{} drive GPIO{} {} -> GPIO9..13 = {:?}",
+                        if drive_high { "down" } else { "up" },
+                        NAMES[i],
+                        if drive_high { "high" } else { "low" },
+                        got
+                    );
+                }
+            }
+            for p in pins.iter_mut() {
+                p.set_output_enable(false);
+                p.apply_input_config(&InputConfig::default());
+            }
+        }
         let spi = Spi::new(
             peripherals.SPI2,
             SpiConfig::default().with_frequency(Rate::from_khz(2000)).with_mode(Mode::_1),
@@ -350,8 +428,14 @@ async fn main(spawner: Spawner) -> ! {
         spawner.spawn(trackpad::run(spi, cs, dr).unwrap());
     }
 
-    let usb = Usb::new_fs(peripherals.USB_FS, peripherals.GPIO20, peripherals.GPIO19);
-    spawner.spawn(usb_host(usb).unwrap());
+    // `usb-log` のときは USB-C をログ（USB シリアル/JTAG）に使うので、USB ホストは動かさない。
+    #[cfg(not(feature = "usb-log"))]
+    {
+        let usb = Usb::new_fs(peripherals.USB_FS, peripherals.GPIO20, peripherals.GPIO19);
+        spawner.spawn(usb_host(usb).unwrap());
+    }
+    #[cfg(feature = "usb-log")]
+    info!("usb-log: logging over the S3 USB-C; USB host (keyboard) is disabled");
 
     let transport = BleConnector::new(peripherals.BT, Default::default()).unwrap();
     let controller = ExternalController::<_, 1>::new(transport);
