@@ -49,6 +49,16 @@ CN2（VIO・DTR・RTS・CTS）は使わない。
 
 ### トラックパッド（12P FFC 変換基板）→ S3
 
+> **番号の向きに注意（2026-10-15 にはまった）。** 下の表の「FFC 番号」は**トラックパッド側（J1）の番号**。
+> 手元の組み合わせ（同方向の FFC + FPC 12P 変換基板）では、**変換基板の印字の番号と J1 の番号が逆順**だった
+> （印字の 12 が J1 の 1 = SCK、印字の 1 が J1 の 12 = VDD）。印字どおりに配線すると、S3 の GPIO12 がパッドの VDD に、
+> GPIO13 がパッドの GND につながり、パッドは一切応答しない（ID が 0x00）。
+> 基板の配線はそのままで、**変換基板をソケットに 180° 回して挿したら動いた**。
+>
+> 見分け方（テスターなし）: S3 を PC に直結して `FEATURES="trackpad usb-log trackpad-probe trackpad-selftest" tools/hk flash` →
+> `tools/hk usb-log`。`probe: pull-up drive GPIO12 low` で GPIO12 が 1 のまま・GPIO13 が常に 0 なら逆向き。
+> 正しければ `selftest ... khz=2000 ...: single 0/300 bad` と `firmware id=0x07` が出る。
+
 | FFC 番号 | 信号 | 接続先 |
 |---|---|---|
 | 1 | SCK | S3 **GPIO12** |

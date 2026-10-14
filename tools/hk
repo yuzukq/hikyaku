@@ -5,6 +5,7 @@
 #   tools/hk flash              ビルドして、S3 が PC に現れるのを待って書き込む（BOOT を押しながら挿す）
 #   tools/hk log [秒]           S3 のログを表示する（CH9102F 経由。省略時は Ctrl-C まで）
 #   tools/hk flash-log [秒]     書き込み → 元の構成に戻すのを待って → ログ表示、を続けて行う
+#   tools/hk usb-log [秒]       S3 の USB-C から直接ログを読む（FEATURES に usb-log を入れて書き込んだとき。CH9102F 不要）
 #
 # 環境変数:
 #   FEATURES  ビルドする機能（既定: trackpad）。例: FEATURES="trackpad trackpad-trace" tools/hk flash
@@ -72,8 +73,11 @@ cmd_build() {
   local key="" peer=""
   [ -f "$KEYFILE" ] && key="$(cat "$KEYFILE")"
   [ -f "$PEERFILE" ] && peer="$(cat "$PEERFILE")"
+  # usb-log はログの出し先を既定（UART）から切り替えるので、既定の feature を外す
+  local nodef=""
+  case " $FEATURES " in *" usb-log "*) nodef="--no-default-features" ;; esac
   c_info "ビルド中（features: $FEATURES）"
-  (cd "$FW" && HIKYAKU_OTA_KEY="$key" HIKYAKU_OTA_PEER="$peer" cargo build --release --features "$FEATURES")
+  (cd "$FW" && HIKYAKU_OTA_KEY="$key" HIKYAKU_OTA_PEER="$peer" cargo build --release $nodef --features "$FEATURES")
   c_ok "ビルド完了"
 }
 
@@ -128,10 +132,25 @@ cmd_log() {
   fi
 }
 
+cmd_usb_log() {
+  local secs="${1:-0}"
+  c_info "S3 を待っています…（S3 の USB-C を PC に挿してください。5V のジャンパーは抜く）"
+  local port=""
+  while [ -z "$port" ]; do
+    port="$(s3_port || true)"
+    [ -z "$port" ] && sleep 0.2
+  done
+  sleep 0.3
+  c_info "ログ: $port（Ctrl-C で終了）"
+  [ "$secs" -gt 0 ] || secs=86400
+  UART_CAP_VENDOR=303a python3 "$ROOT/tools/scripts/uart_cap.py" "$secs" "$port"
+}
+
 case "${1:-}" in
   build) cmd_build ;;
   flash) cmd_flash ;;
   log) shift; cmd_log "${1:-0}" ;;
   flash-log) shift; cmd_flash; cmd_log "${1:-0}" ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  usb-log) shift; cmd_usb_log "${1:-0}" ;;
+  *) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

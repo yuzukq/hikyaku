@@ -81,6 +81,18 @@ tools/hk flash-log      # 書き込み → 元の構成に戻すのを待って 
 FEATURES="trackpad trackpad-trace" tools/hk flash   # 機能を変えてビルド
 ```
 
+**CH9102F なしでログを見る（診断）:** `usb-log` を付けると、ログを S3 の USB-C（USB シリアル/JTAG）から PC に出す。
+キーボード用の USB ホストは動かさない（7skb は使えない）。この版が入っている間は、BOOT を押さなくても `tools/hk flash` で書き込める。
+
+```fish
+FEATURES="trackpad usb-log trackpad-probe trackpad-selftest" tools/hk flash   # S3 を PC に直結（5V のジャンパーは抜く）
+tools/hk usb-log 20                                                          # ログを 20 秒読む
+```
+
+`trackpad-probe` は起動時に、SPI を使う前のピンの状態（DR、MISO のプルアップ/プルダウン）と、GPIO9〜13 の短絡検査
+（1 本ずつ駆動して、ほかのピンがつられるか・駆動したレベルにならないか）をログに出す。テスターなしで配線を切り分けられる
+（変換基板の逆挿しを見つけた。[hardware/assembly.md](hardware/assembly.md)）。パッドの出力と一瞬ぶつかるので、診断のときだけ使う。
+
 ## 補助スクリプト（`tools/scripts/`）
 
 - `flash_when_ready.sh` … S3 が PC に現れたら、すぐ有線で書き込む（BOOT を押しながら挿すタイミングを気にしなくてよい）。失敗しても再試行する。

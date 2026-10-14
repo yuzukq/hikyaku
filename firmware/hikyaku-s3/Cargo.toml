@@ -9,6 +9,13 @@ name = "hikyaku-s3"
 path = "./src/bin/main.rs"
 
 [features]
+# ログの出し先。既定は UART0（GPIO43 → CH9102F）。
+default = ["log-uart"]
+log-uart = ["esp-println/uart"]
+# 診断用: ログを S3 の USB-C（USB シリアル/JTAG）から PC に出す。CH9102F が使えないときに、S3 を PC に直接つないでログを見る。
+# USB-C を PC に使うので、キーボード用の USB ホストは動かさない（7skb は使えない）。
+# `--no-default-features` が必要（`tools/hk` は FEATURES に usb-log があれば自動で付ける）。
+usb-log = ["esp-println/jtag-serial"]
 selftest = []
 # USB キーボードのレポート（修飾キー・キーコード）を 1 つずつログに出す。OTA の組み合わせキーが検出されないときの切り分け用。
 usb-trace = []
@@ -28,6 +35,8 @@ trackpad-soft-tap = ["trackpad"]
 trackpad-sens-1x = ["trackpad"]
 trackpad-sens-2x = ["trackpad"]
 trackpad-sens-3x = ["trackpad"]
+# 診断: 起動時に、SPI を使う前の DR・MISO のピンの状態（プルアップ／プルダウンで読んだ値）をログに出す。テスターなしで配線を切り分ける用。
+trackpad-probe = ["trackpad"]
 # 起動時に SPI の読み書きの総当たりテスト（モード × 周波数 × CS 待ち）を行い、結果をログに出す。
 trackpad-selftest = ["trackpad"]
 
@@ -56,7 +65,7 @@ esp-backtrace = { version = "0.20.0", features = [
   "panic-handler",
   "println",
 ] }
-esp-println = { version = "0.18.0", default-features = false, features = ["esp32s3", "log-04", "uart", "colors", "critical-section"] }
+esp-println = { version = "0.18.0", default-features = false, features = ["esp32s3", "log-04", "colors", "critical-section"] }
 esp-radio = { version = "1.0.0-beta.1", features = [
   "ble",
   "esp-alloc",
