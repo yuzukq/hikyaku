@@ -240,6 +240,8 @@ async fn usb_host(usb: Usb<'static>) {
                     break;
                 }
                 Either::First(Either::First(Ok(HandlerEvent::HandlerEvent(KbdEvent::KeyStatusUpdate(u))))) => {
+                    #[cfg(feature = "usb-trace")]
+                    info!("usb: key report mods={:#04x} keys={:?}", u.modifiers, u.keypress);
                     if is_ota_chord(u.modifiers, &u.keypress) {
                         info!("usb: OTA chord");
                         OTA_REQUEST.signal(());

@@ -9,7 +9,8 @@ firmware/
   uart-bridge-c3/    C3 を UART→USB 変換器にする（CH9102F があれば不要）
 crates/hikyaku-hid/      no_std。ブートキーボードレポートの解釈・Usage 名（ホストでテスト可）
 crates/hikyaku-pinnacle/ no_std。Cirque Pinnacle の SPI ドライバ（RAP, embedded-hal 1.0。SPI モックで単体テスト）
-crates/hikyaku-pointer/  no_std。トラックパッドの絶対座標 → マウスレポート（移動・加速・平滑化・タップ・ドラッグ・スクロール）
+crates/hikyaku-pointer/  no_std。`relative`: 相対モードのパケット → マウスレポート（向き・倍率・持ち越し・分割。静止フィルタ・自前タップ判定）。
+                         ホストで実機ログを再生してテストできる。旧方式（絶対座標）はタグ `absolute-mode-last` に残っている
 tools/hid-probe/     PC 用: hidraw の一覧・記述子ダンプ・入力解析・ESP への中継（bridge）
 tools/scripts/       検証用スクリプト（ble_rx.py, uart_cap.py）
 ```
@@ -24,9 +25,18 @@ tools/scripts/       検証用スクリプト（ble_rx.py, uart_cap.py）
   アドレスは固定のランダム静的アドレス `FF:E4:05:1A:8F:FF`。名前は `hikyaku`。IO 能力は NoInputNoOutput（JustWorks）。
 - **ボンディング保存（`src/bin/bond_store/`）:** `conn.set_bondable(true)` した上で、`PairingComplete` の鍵をフラッシュの 0x9000（`nvs` 領域, 4KB）に保存。最大 4 台、起動時に復元。
   ※ `espflash erase-flash` すると消える（Mac 側でも削除して再ペアリングが必要）。
-- **トラックパッド（`--features trackpad`、既定は無効）:** `src/bin/trackpad/mod.rs`。SPI2（SCK=GPIO12, MISO=GPIO13, MOSI=GPIO11, SS=GPIO10, DR=GPIO9, モード 1, 1MHz）で Pinnacle を読み、
-  `hikyaku-pointer` でマウスレポートにして BLE の ID2 へ流す。`SCROLL_MODE`（AtomicBool）が true の間はスクロールに変換。**疎通は実機で確認済み（2026-10-11）。動きの調整はこれから。**
-  起動時のログ `trackpad: firmware id=... version=...` で疎通を確認する（参考実装では 0x07 / 0x3A）。
+- **トラックパッド（`--features trackpad`、既定は無効）:** `src/bin/trackpad/mod.rs`。SPI2（SCK=GPIO12, MISO=GPIO13, MOSI=GPIO11, SS=GPIO10, DR=GPIO9, モード 1, **2MHz**）で Pinnacle を
+  **相対モード**で読み、`hikyaku_pointer::relative::Relay` でマウスレポートにして BLE の ID2 へ流す。`SCROLL_MODE`（AtomicBool）が true の間はスクロールに変換。
+  **相対モードで動作確認済み（2026-10-13）。** 起動時のログ `trackpad: relative mode, firmware id=0x07 version=0x3a` で疎通を確認する（ID が違えば止まる）。
+  調整用の feature（どれも既定は無効。1 つずつ試す）:
+  | feature | 内容 |
+  |---|---|
+  | `trackpad-still-filter` | 指を止めているときの ±1〜2 のぶれを抑える（動き始めは鈍らせない） |
+  | `trackpad-soft-tap` | パッド側のタップを切り、ソフト側でタップを判定する（スワイプ中の誤クリック対策。ZIdle=5） |
+  | `trackpad-sens-1x` / `-3x` / `-4x` | タッチ感度（ADC 減衰）。既定は **2X**（2026-10-15 に実機で決定。4X では指の検出が途切れた）。1X がいちばん敏感、4X がいちばん鈍い |
+  | `trackpad-trace` | 生パケットをログに出す（ホストで再生できる。[../tools/traces/README.md](../tools/traces/README.md)） |
+  | `trackpad-selftest` | 起動時に SPI の読み戻しテスト |
+  | `usb-trace` | USB キーボードのレポートを 1 つずつログに出す（OTA の組み合わせキーの切り分け用） |
 - **ログ:** `esp-println` を `uart` feature にして UART0（GPIO43 = ボードの TX ピン）へ。USB シリアルはホスト動作中に使えないため。
 
 ## ビルド
@@ -40,7 +50,7 @@ cargo build --release --features trackpad  # トラックパッド有効（同�
 
 # C3 / ホスト側ツール
 cargo build --release      # firmware/hikyaku-c3 など
-cargo test                 # リポジトリ直下: crates/hikyaku-{hid,pinnacle,pointer}, tools/hid-probe（計 27 件）
+cargo test --workspace     # リポジトリ直下: crates/hikyaku-{hid,pinnacle,pointer}, tools/hid-probe（2026-10-13 時点で 79 件）
 ```
 
 初回のセットアップ:

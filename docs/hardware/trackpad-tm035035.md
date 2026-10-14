@@ -47,13 +47,12 @@ FFC は「**導体が見える面を 1 ピン側**にして挿す」。
 外周に位置合わせ用の切り欠きが 3 つ。ケースでは下から支える（タップでたわむのを防ぐ）。導電性の素材をベゼルに使わない。
 オーバーレイは導電性の素材（金・銀・カーボン等）NG、基板との間に空気層を作らない。
 
-## ソフトウェア側（実装済み・実機未確認）
+## ソフトウェア側
 
-- **ドライバ:** `crates/hikyaku-pinnacle`。SPI（モード 1）の RAP: 書き込み `[0x80|addr, v]`、読み出し `[0xA0|addr, 0xFC, 0xFC, 0xFC…]` で **4 バイト目以降**がデータ（自動インクリメント）。
-  絶対座標モード（FeedConfig1=0x03）、タップ/スクロール/GlideExtend 無効（FeedConfig2=0x1E）、ZIdle=5。絶対座標パケットはレジスタ 0x12〜0x17。
-  ※コマンド形式は Cirque のリファレンス実装に基づく。**実機で最初に確認すること**（ID/バージョンの読み出し）。
-- **ポインタ変換:** `crates/hikyaku-pointer`。クリップ（128..1920 × 64..1472）、平滑化、速度に応じた加速、端数の持ち越し、
-  タップ=左クリック、タップ直後のタッチ&ホールド=ドラッグ、スクロールモード（移動をホイール/パンへ）。設定は `Config`（既定値は仮。実機で調整する）。
+- **ドライバ:** `crates/hikyaku-pinnacle`。SPI（モード 1、2MHz）の RAP: 書き込み `[0x80|addr, v]`、読み出し `[0xA0|addr, 0xFC, 0xFC, 0xFC…]` で **4 バイト目以降**がデータ（自動インクリメント）。
+  相対モードだけを扱う（初期化の手順は下の「実装の方針」）。実機で ID=0x07 / バージョン=0x3A を確認済み。
+- **変換:** `crates/hikyaku-pointer` の `relative`（相対モードのパケット → マウスレポート）。
+- 絶対座標モード（FeedConfig1=0x03、パケットはレジスタ 0x12〜0x17）で自前に移動量を作る旧方式は 2026-10-13 に削除した（タグ `absolute-mode-last`）。
 - 参考実装: QMK `cirque_pinnacle`、https://github.com/2bndy5/CirquePinnacle
 - **単一指のみ**（Pinnacle 1CA027 は 1 本指の位置しか報告しないと理解している。要確認）。
   ROADMAP にあった「2 本指スクロール」は難しいので、キー押下中スクロール／縁での円スクロールなどで代替する想定。
@@ -65,12 +64,16 @@ ZMK（Zephyr の `drivers/input/input_pinnacle.c`）と Cirque 公式の USB マ
 
 - **相対モード**で、パッドが計算した移動量を **1:1 でそのまま**マウスレポートにする（加速は OS に任せる）。
   丸いパッドを長方形の画面に対応づける絶対座標の方式はやめた。
-- 初期化: ソフトリセット → 電源投入時のキャリブレーション完了（SW_CC）を待つ → 感度（ADC 減衰 4X）→ キャリブレーション
+- 初期化: ソフトリセット → 電源投入時のキャリブレーション完了（SW_CC）を待つ → 感度（ADC 減衰 2X。4X では指の検出が途切れた）→ キャリブレーション
   → `FeedConfig2 = 0x1C`（GlideExtend・スクロール・二次タップ無効。タップ有効）→ `FeedConfig1 = 0x01`（相対 + 有効）→ ZIdle = 0。
   **パッド側の反転ビット（0x40/0x80）は使わない**: 相対モードで Y 反転を入れると Y の移動量がほとんど出なくなった（2026-10-13）。
   向きはファーム側（`SWAP_XY`・`SCREEN_X_INVERT`・`SCREEN_Y_INVERT`）で合わせる。この個体はパッドが 90 度回った向きで付いている。
 - パケットは 3 バイト。`dx = b1 (b0 の bit4 が立っていたら -256)`、`dy` も同様（bit5）。タップは `b0` の bit0。
 - 向き・反転・XY 入れ替えは `firmware/hikyaku-s3/src/bin/trackpad/mod.rs` の `SWAP_XY`・`SCREEN_*_INVERT`。
+- 変換そのもの（向き・倍率・持ち越し・レポートの分割）は `crates/hikyaku-pointer/src/relative.rs`（`Relay`）。ホストで実機ログを
+  再生してテストできる（[../../tools/traces/README.md](../../tools/traces/README.md)）。静止中のぶれを抑えるフィルタ（`StillFilter`）と
+  自前のタップ判定（`SoftTap`）も同じファイルにあり、ファームでは `trackpad-still-filter` / `trackpad-soft-tap` feature で有効にする
+  （既定は無効。[../firmware.md](../firmware.md) の feature 一覧）。
 
 
 

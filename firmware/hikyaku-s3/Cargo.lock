@@ -1563,6 +1563,9 @@ dependencies = [
 [[package]]
 name = "hikyaku-pointer"
 version = "0.1.0"
+dependencies = [
+ "hikyaku-pinnacle",
+]
 
 [[package]]
 name = "hikyaku-s3"
