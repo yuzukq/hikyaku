@@ -92,25 +92,27 @@ fn selftest(pad: &mut Pinnacle<ExclusiveDevice<Spi<'static, Blocking>, Output<'s
     info!("selftest: done");
 }
 
-/// タッチ感度（ADC 減衰）。既定は 4X（いちばん鈍い）。`trackpad-sens-1x` / `-2x` / `-3x` で変える（1X がいちばん敏感）。
+/// タッチ感度（ADC 減衰）。既定は **2X**（2026-10-15、基板化後の実機で決めた）。4X（いちばん鈍い。QMK の既定）では指を検出したり
+/// しなかったりして、動きが途切れ、左右がほとんど出なかった。2X で動き・タップとも良好。
+/// `trackpad-sens-1x` / `-3x` / `-4x` で変える（1X がいちばん敏感）。`trackpad-sens-2x` は既定と同じ。
 /// 変えるとキャリブレーションが走る（起動中はパッドに触れないこと）。
 #[cfg(any(
-    all(feature = "trackpad-sens-1x", feature = "trackpad-sens-2x"),
     all(feature = "trackpad-sens-1x", feature = "trackpad-sens-3x"),
-    all(feature = "trackpad-sens-2x", feature = "trackpad-sens-3x"),
+    all(feature = "trackpad-sens-1x", feature = "trackpad-sens-4x"),
+    all(feature = "trackpad-sens-3x", feature = "trackpad-sens-4x"),
 ))]
-compile_error!("trackpad-sens-1x / -2x / -3x のうち 1 つだけを指定してください");
+compile_error!("trackpad-sens-1x / -3x / -4x のうち 1 つだけを指定してください");
 const SENSITIVITY: Attenuation = if cfg!(feature = "trackpad-sens-1x") {
     Attenuation::X1
-} else if cfg!(feature = "trackpad-sens-2x") {
-    Attenuation::X2
 } else if cfg!(feature = "trackpad-sens-3x") {
     Attenuation::X3
-} else {
+} else if cfg!(feature = "trackpad-sens-4x") {
     Attenuation::X4
+} else {
+    Attenuation::X2
 };
 
-/// 相対モードの設定（タップ有効、感度 4X、ZIdle 0）。
+/// 相対モードの設定（タップ有効、感度 2X、ZIdle 0）。
 /// **パッド側の反転（invert_x/invert_y）は使わない。** データシートでは絶対座標モード用で、実機（2026-10-13）では
 /// Y 反転を入れると相対モードの Y の移動量がほとんど出なくなった。向きはソフト側（`SWAP_XY`・`SCREEN_*_INVERT`）で合わせる。
 ///

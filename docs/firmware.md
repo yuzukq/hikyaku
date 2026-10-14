@@ -33,7 +33,7 @@ tools/scripts/       検証用スクリプト（ble_rx.py, uart_cap.py）
   |---|---|
   | `trackpad-still-filter` | 指を止めているときの ±1〜2 のぶれを抑える（動き始めは鈍らせない） |
   | `trackpad-soft-tap` | パッド側のタップを切り、ソフト側でタップを判定する（スワイプ中の誤クリック対策。ZIdle=5） |
-  | `trackpad-sens-1x` / `-2x` / `-3x` | タッチ感度（ADC 減衰）。既定は 4X（いちばん鈍い）。1X がいちばん敏感 |
+  | `trackpad-sens-1x` / `-3x` / `-4x` | タッチ感度（ADC 減衰）。既定は **2X**（2026-10-15 に実機で決定。4X では指の検出が途切れた）。1X がいちばん敏感、4X がいちばん鈍い |
   | `trackpad-trace` | 生パケットをログに出す（ホストで再生できる。[../tools/traces/README.md](../tools/traces/README.md)） |
   | `trackpad-selftest` | 起動時に SPI の読み戻しテスト |
   | `usb-trace` | USB キーボードのレポートを 1 つずつログに出す（OTA の組み合わせキーの切り分け用） |

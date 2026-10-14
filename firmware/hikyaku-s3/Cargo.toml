@@ -30,11 +30,12 @@ trackpad-still-filter = ["trackpad"]
 # パッド側のタップを切り、ソフト側でタップを判定する（hikyaku_pointer::relative::SoftTap）。スワイプ中の誤クリック対策。
 # 指を離した合図に ZIdle = 5（QMK と同じ）を使う。既定は無効（パッド側のタップ）。
 trackpad-soft-tap = ["trackpad"]
-# タッチ感度（ADC 減衰）。既定は 4X（いちばん鈍い。QMK の平らなオーバーレイの既定）。軽いタッチへの反応を上げる候補。
-# 1 つだけ付ける（複数付けるとコンパイルエラー）。
+# タッチ感度（ADC 減衰）。既定は 2X（4X では指の検出が途切れた。2026-10-15）。1X がいちばん敏感、4X がいちばん鈍い（QMK の既定）。
+# 1 つだけ付ける（複数付けるとコンパイルエラー）。`trackpad-sens-2x` は既定と同じ（以前のコマンドがそのまま使えるように残している）。
 trackpad-sens-1x = ["trackpad"]
 trackpad-sens-2x = ["trackpad"]
 trackpad-sens-3x = ["trackpad"]
+trackpad-sens-4x = ["trackpad"]
 # 診断: 起動時に、SPI を使う前の DR・MISO のピンの状態（プルアップ／プルダウンで読んだ値）をログに出す。テスターなしで配線を切り分ける用。
 trackpad-probe = ["trackpad"]
 # 起動時に SPI の読み書きの総当たりテスト（モード × 周波数 × CS 待ち）を行い、結果をログに出す。
