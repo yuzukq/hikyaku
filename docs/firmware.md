@@ -37,7 +37,15 @@ tools/scripts/       検証用スクリプト（ble_rx.py, uart_cap.py）
   | `trackpad-trace` | 生パケットをログに出す（ホストで再生できる。[../tools/traces/README.md](../tools/traces/README.md)） |
   | `trackpad-selftest` | 起動時に SPI の読み戻しテスト |
   | `usb-trace` | USB キーボードのレポートを 1 つずつログに出す（OTA の組み合わせキーの切り分け用） |
-- **ログ:** `esp-println` を `uart` feature にして UART0（GPIO43 = ボードの TX ピン）へ。USB シリアルはホスト動作中に使えないため。
+  | `trackpad-probe` | 起動時に DR・MISO のピンの状態と、GPIO9〜13 の短絡を調べてログに出す（テスターなしの配線の切り分け。診断のときだけ） |
+  | `usb-log` | ログを S3 の USB-C に出す（キーボード用の USB ホストは止まる。下の「CH9102F なしでログを見る」） |
+
+  1 秒ごとの集計ログ `trackpad: packets= reports= dropped= max_gap_ms= ...`: `dropped` は BLE へ送るキューがいっぱいで捨てた数、
+  `max_gap_ms` は読み取りの間隔の最大（タスクが止まっていないか）。2026-10-15 の実機ではどちらも問題なし（0 と 6ms）。
+- **LED（`src/bin/led/`）:** ボード（ESP32-S3 SuperMini）の GPIO48 の RGB LED（WS2812 互換）を RMT で駆動。トラックパッドの初期化中は**赤**（触らない。起動時のキャリブレーションが狂う）、
+  終わったら**緑**、パッドが見つからない（ID が 0x07 でない）と**青**。LED は最後の色を保持するので、書き込み中や再起動の直前も前の色のまま。
+  ボードの青い点滅は電池の充電表示（電池なし）で、ファームとは関係ない。
+- **ログ:** 既定（feature `log-uart`）は `esp-println` の UART0（GPIO43 = ボードの TX ピン）へ。USB シリアルはホスト動作中に使えないため。`usb-log` では USB シリアル/JTAG へ。
 
 ## ビルド
 

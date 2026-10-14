@@ -34,6 +34,8 @@
 - **CH9102F は、ログの取り出し口も兼ねる**（S3 の TX → CH9102F の RxD）。PC につなげばログが見られ、バッテリーにつなげば電源だけになる。
 - 秋月の Type-C DIP 化キット（5077CR）と 5.1kΩ は、**不要**になった。
 
+実際の基板の配線図（持ち主作成）: [image/universal.png](image/universal.png)（元データ: `image/universal.xcf`、GIMP）
+
 ## 配線表
 
 ### CH9102F（CN3: 1×4 ピン）→ S3
@@ -120,6 +122,9 @@ S3・CH9102F・FFC 変換基板は、基板に**ピンソケット（メス）**
 - CH9102F の **TxD がどこにもつながっていない**こと
 
 ## 動作確認
+
+> **2026-10-15 の結果:** 変換基板を 180° 挿し直した後、`selftest` 2MHz で 0/300、ID `0x07`、キー入力とトラックパッド（感度 2X）が Mac で動作。
+> CH9102F の受信が壊れていたため、手順 3 のログは `usb-log` の版（S3 を PC に直結）で確認した。テスターは未調達。
 
 1. ジャンパーを抜き、S3 を PC に挿して書き込む（`FEATURES="trackpad trackpad-selftest trackpad-trace" tools/hk flash`）。
 2. S3 を PC から抜き、ジャンパーを挿し、CH9102F を PC に挿す。7skb を S3 の USB-C に挿す。
