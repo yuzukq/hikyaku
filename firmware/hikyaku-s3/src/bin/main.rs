@@ -180,6 +180,58 @@ fn media_report(buf: &[u8]) -> Option<Report> {
     }
 }
 
+/// キーボードのレポート（ブート形式 8 バイト）を BLE へ流す。
+/// F24 を押している間は、トラックパッドの動きをスクロールにする（F24 自体は Mac に送らない）。
+/// 7sPro では、親指キーの長押し（QMK のモッドタップ）に F24 を割り当てている。
+#[allow(unused_mut)]
+fn forward_key(mut r: [u8; 8]) {
+    #[cfg(feature = "trackpad")]
+    {
+        let scroll = hikyaku_hid::take_key(&mut r, hikyaku_hid::KEY_F24);
+        trackpad::SCROLL_MODE.store(scroll, core::sync::atomic::Ordering::Relaxed);
+    }
+    let _ = REPORTS.try_send(Report::Key(r));
+}
+
+/// `serial-bridge`: PC から USB シリアル/JTAG で届く行（`K<16 桁 hex>` = キーボードの 8 バイト）を、USB キーボードの代わりに使う。
+/// PC 側は `hid-probe evbridge`。7sPro が手元にないときの試験用。
+#[cfg(feature = "serial-bridge")]
+#[embassy_executor::task]
+async fn serial_bridge(mut rx: esp_hal::usb::usb_serial_jtag::UsbSerialJtagRx<'static, esp_hal::Async>) {
+    let mut line = [0u8; 32];
+    let mut len = 0;
+    let mut buf = [0u8; 64];
+    loop {
+        let Ok(n) = embedded_io_async::Read::read(&mut rx, &mut buf).await; // エラーにならない（Infallible）
+        for &b in &buf[..n] {
+            match b {
+                b'\n' | b'\r' => {
+                    if len == 17 && line[0] == b'K' {
+                        let nib = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+                        let mut r = [0u8; 8];
+                        let ok = (0..8).all(|i| match (nib(line[1 + 2 * i]), nib(line[2 + 2 * i])) {
+                            (Some(h), Some(l)) => {
+                                r[i] = h << 4 | l;
+                                true
+                            }
+                            _ => false,
+                        });
+                        if ok {
+                            forward_key(r);
+                        }
+                    }
+                    len = 0;
+                }
+                _ if len < line.len() => {
+                    line[len] = b;
+                    len += 1;
+                }
+                _ => len = 0,
+            }
+        }
+    }
+}
+
 /// USB ホスト：つながったキーボード（ブートプロトコル）を読んで REPORTS に流す。
 #[cfg_attr(feature = "usb-log", allow(dead_code))]
 #[embassy_executor::task]
@@ -198,6 +250,7 @@ async fn usb_host(usb: Usb<'static>) {
             Ok((info, _)) => info,
             Err(e) => {
                 warn!("usb: enumerate failed: {:?}", e);
+                led::set(led::YELLOW); // 診断: USB の認識に失敗
                 continue;
             }
         };
@@ -210,11 +263,14 @@ async fn usb_host(usb: Usb<'static>) {
             Ok(k) => k,
             Err(e) => {
                 warn!("usb: not a boot keyboard: {:?}", e);
+                led::set(led::PURPLE); // 診断: ブートキーボードが見つからない
                 handle.free_address(info.device_address);
                 continue;
             }
         };
         info!("usb: keyboard ready");
+        led::flash(led::WHITE, 300).await; // 診断: キーボードを認識した
+        let mut first_key = true;
 
         let mut media = open_media_pipe(&handle, &info).await;
         if media.is_none() {
@@ -248,17 +304,22 @@ async fn usb_host(usb: Usb<'static>) {
                         let _ = REPORTS.try_send(Report::Key([0; 8])); // 押しっぱなしを残さない。転送はしない
                         continue;
                     }
+                    if first_key {
+                        first_key = false;
+                        led::flash(led::CYAN, 200).await; // 診断: 最初のキー入力が届いた
+                    }
                     let mut r = [0u8; 8];
                     r[0] = u.modifiers;
                     for (dst, k) in r[2..].iter_mut().zip(u.keypress.iter()) {
                         *dst = k.map_or(0, |k| k.get());
                     }
-                    let _ = REPORTS.try_send(Report::Key(r));
+                    forward_key(r);
                 }
                 Either::First(Either::First(Ok(HandlerEvent::HandlerDisconnected))) => break,
                 Either::First(Either::First(Ok(HandlerEvent::NoChange))) => {}
                 Either::First(Either::First(Err(e))) => {
                     warn!("usb: read error: {:?}", e);
+                    led::set(led::ORANGE); // 診断: キーボードの読み取りエラー
                     break;
                 }
                 Either::Second(DeviceEvent::Disconnected) => break,
@@ -266,6 +327,8 @@ async fn usb_host(usb: Usb<'static>) {
             }
         }
         info!("usb: keyboard detached");
+        #[cfg(feature = "trackpad")]
+        trackpad::SCROLL_MODE.store(false, core::sync::atomic::Ordering::Relaxed);
         handle.free_address(info.device_address);
         // 押しっぱなしが残らないよう全解放を送る。
         let _ = REPORTS.try_send(Report::Key([0; 8]));
@@ -444,6 +507,12 @@ async fn main(spawner: Spawner) -> ! {
     }
     #[cfg(feature = "usb-log")]
     info!("usb-log: logging over the S3 USB-C; USB host (keyboard) is disabled");
+    #[cfg(feature = "serial-bridge")]
+    {
+        let (rx, _tx) = esp_hal::usb::usb_serial_jtag::UsbSerialJtag::new(peripherals.USB_DEVICE).into_async().split();
+        spawner.spawn(serial_bridge(rx).unwrap());
+        info!("serial-bridge: key reports from the PC (hid-probe evbridge)");
+    }
 
     let transport = BleConnector::new(peripherals.BT, Default::default()).unwrap();
     let controller = ExternalController::<_, 1>::new(transport);

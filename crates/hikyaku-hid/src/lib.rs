@@ -59,6 +59,21 @@ pub fn usage_name(code: u8) -> &'static str {
     }
 }
 
+/// F24 のキーコード（HID Usage 0x73）。hikyaku はこのキーを Mac に送らず、押している間トラックパッドをスクロールにする。
+pub const KEY_F24: u8 = 0x73;
+
+/// ブートキーボードのレポート（8 バイト）からキー `key` を取り除き、残りのキーを前に詰める。取り除いたら true。
+/// 修飾キー（1 バイト目）と予約バイト（2 バイト目）は触らない。
+pub fn take_key(report: &mut [u8; 8], key: u8) -> bool {
+    let keys = &mut report[2..];
+    let Some(i) = keys.iter().position(|&k| k == key) else {
+        return false;
+    };
+    keys.copy_within(i + 1.., i);
+    keys[keys.len() - 1] = 0;
+    true
+}
+
 const LETTERS: [&str; 26] = [
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
     "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
@@ -76,6 +91,23 @@ mod tests {
         assert_eq!(r.modifiers, 0x02);
         assert_eq!(r.pressed().collect::<Vec<_>>(), vec![4, 5]);
         assert_eq!(usage_name(4), "A");
+    }
+
+    #[test]
+    fn take_key_removes_and_compacts() {
+        let mut r = [0x02, 0, 0x04, KEY_F24, 0x05, 0, 0, 0];
+        assert!(take_key(&mut r, KEY_F24));
+        assert_eq!(r, [0x02, 0, 0x04, 0x05, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn take_key_last_slot_and_absent() {
+        let mut r = [0, 0, 1, 2, 3, 4, 5, KEY_F24];
+        assert!(take_key(&mut r, KEY_F24));
+        assert_eq!(r, [0, 0, 1, 2, 3, 4, 5, 0]);
+        let mut r = [0x01, 0, 0x04, 0, 0, 0, 0, 0];
+        assert!(!take_key(&mut r, KEY_F24));
+        assert_eq!(r, [0x01, 0, 0x04, 0, 0, 0, 0, 0]);
     }
 
     #[test]

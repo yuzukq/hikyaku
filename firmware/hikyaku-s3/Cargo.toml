@@ -16,6 +16,8 @@ log-uart = ["esp-println/uart"]
 # USB-C を PC に使うので、キーボード用の USB ホストは動かさない（7skb は使えない）。
 # `--no-default-features` が必要（`tools/hk` は FEATURES に usb-log があれば自動で付ける）。
 usb-log = ["esp-println/jtag-serial"]
+# 試験用: PC のキーボードの入力を USB シリアルで受け取り、USB キーボードの代わりに使う（PC 側は `hid-probe evbridge`）。
+serial-bridge = ["usb-log"]
 selftest = []
 # USB キーボードのレポート（修飾キー・キーコード）を 1 つずつログに出す。OTA の組み合わせキーが検出されないときの切り分け用。
 usb-trace = []
@@ -77,6 +79,7 @@ esp-radio = { version = "1.0.0-beta.1", features = [
 trouble-host = { version = "0.7.0", features = ["gatt", "security", "log", "serde"] }
 embassy-futures = "0.1"
 embedded-hal-bus = { version = "0.3", optional = true }
+hikyaku-hid = { path = "../../crates/hikyaku-hid" }
 hikyaku-pinnacle = { path = "../../crates/hikyaku-pinnacle", optional = true }
 hikyaku-pointer = { path = "../../crates/hikyaku-pointer", optional = true }
 sha2 = { version = "0.11", default-features = false }

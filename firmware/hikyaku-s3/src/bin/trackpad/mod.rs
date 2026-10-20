@@ -29,7 +29,7 @@ use log::{info, warn};
 
 use crate::{Report, REPORTS};
 
-/// true の間、トラックパッドの動きをスクロールに変換する（キー押下中など。今は常に false）。
+/// true の間、トラックパッドの動きをスクロールに変換する。USB キーボードの F24 を押している間 true（`main.rs` の `usb_host`）。
 pub static SCROLL_MODE: AtomicBool = AtomicBool::new(false);
 
 /// SPI の読み書きの総当たりテスト。パッドを触らなくても、レジスタに既知のパターンを書いて読み戻すだけで、
@@ -141,6 +141,9 @@ const REL_GAIN: i32 = 2;
 /// スクロールモードで、ホイール 1 目盛りに相当する移動量。
 const SCROLL_DIV: i32 = 8;
 
+/// スクロールの向きを反転する（2026-10-20。持ち主の Mac の設定で、反転したほうが直感どおりだった）。
+const SCROLL_INVERT: bool = true;
+
 /// 相対モードの変換の設定（上の定数をまとめたもの。`hikyaku_pointer::relative::Config::FIRMWARE_DEFAULT` と同じ値）。
 fn relay_config() -> RelayConfig {
     RelayConfig {
@@ -149,6 +152,7 @@ fn relay_config() -> RelayConfig {
         invert_y: SCREEN_Y_INVERT,
         gain: REL_GAIN,
         scroll_div: SCROLL_DIV,
+        scroll_invert: SCROLL_INVERT,
         // 静止中のぶれを抑える（`trackpad-still-filter`）。既定は無効。
         still: cfg!(feature = "trackpad-still-filter").then_some(StillFilter::DEFAULT),
         // 自前のタップ判定（`trackpad-soft-tap`）。既定はパッド側のタップ。

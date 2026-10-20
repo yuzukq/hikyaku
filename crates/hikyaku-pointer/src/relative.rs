@@ -25,6 +25,8 @@ pub struct Config {
     pub gain: i32,
     /// スクロールモードで、ホイール 1 目盛りに相当する移動量。
     pub scroll_div: i32,
+    /// スクロールの向きを反転する。false: 指を下へ動かすとホイールを手前に回したのと同じ（2026-10-13 時点のファームの動き）。
+    pub scroll_invert: bool,
     /// 静止中のぶれを抑えるフィルタ（[`StillFilter`]）。`None` で無効（ファームの既定）。
     pub still: Option<StillFilter>,
     /// 自前のタップ判定（[`SoftTap`]）。`None` ならパッド側のタップ（パケットのボタンビット）を使う（ファームの既定）。
@@ -32,9 +34,18 @@ pub struct Config {
 }
 
 impl Config {
-    /// ファーム（`trackpad/mod.rs`）の 2026-10-13 時点の既定値。持ち主が実機で「調子が良い」と確認した設定。
-    pub const FIRMWARE_DEFAULT: Config =
-        Config { swap_xy: true, invert_x: true, invert_y: true, gain: 2, scroll_div: 8, still: None, soft_tap: None };
+    /// ファーム（`trackpad/mod.rs`）の既定値。持ち主が実機で「調子が良い」と確認した設定。
+    /// スクロールの向きは 2026-10-20 に反転した（持ち主の Mac で、直感どおりの向きになるように）。
+    pub const FIRMWARE_DEFAULT: Config = Config {
+        swap_xy: true,
+        invert_x: true,
+        invert_y: true,
+        gain: 2,
+        scroll_div: 8,
+        scroll_invert: true,
+        still: None,
+        soft_tap: None,
+    };
 }
 
 /// 自前のタップ判定の設定（ファームでは `trackpad-soft-tap` feature。パッド側のタップは切る）。
@@ -314,7 +325,7 @@ impl Relay {
 
     fn accumulate(&mut self, sx: i32, sy: i32, scroll_mode: bool) {
         if scroll_mode {
-            self.carry_wheel += -sy;
+            self.carry_wheel += if self.cfg.scroll_invert { sy } else { -sy };
         } else {
             self.carry_x += sx * self.cfg.gain;
             self.carry_y += sy * self.cfg.gain;
@@ -402,7 +413,16 @@ mod tests {
     }
 
     fn plain() -> Config {
-        Config { swap_xy: false, invert_x: false, invert_y: false, gain: 1, scroll_div: 8, still: None, soft_tap: None }
+        Config {
+            swap_xy: false,
+            invert_x: false,
+            invert_y: false,
+            gain: 1,
+            scroll_div: 8,
+            scroll_invert: false,
+            still: None,
+            soft_tap: None,
+        }
     }
 
     fn with_tap() -> Config {
@@ -729,10 +749,23 @@ mod tests {
     }
 
     #[test]
+    fn scroll_invert_flips_the_wheel() {
+        // 画面の下向き（sy > 0）の動き 8 で 1 目盛り。反転なしならホイールは -1、反転ありなら +1。
+        let pkt = parse_relative(&[0x08, 8, 0]); // パッドの dx=8 → 入れ替え・反転後の画面の sy=-8
+        for (invert, want) in [(false, 1i8), (true, -1i8)] {
+            let mut r = Relay::new(Config { scroll_invert: invert, ..Config::FIRMWARE_DEFAULT });
+            let mut out = Vec::new();
+            r.push(0, &pkt, true, |x| out.push(x));
+            assert_eq!(out.iter().map(|x| x[3] as i8).sum::<i8>(), want, "invert={invert}");
+        }
+    }
+
+    #[test]
     fn matches_firmware_on_random_packets() {
         let mut rng = Lcg(20261013);
         for _ in 0..200 {
-            let mut relay = Relay::new(Config::FIRMWARE_DEFAULT);
+            // Golden は 2026-10-13 時点のファームの写し（スクロールは反転なし）
+            let mut relay = Relay::new(Config { scroll_invert: false, ..Config::FIRMWARE_DEFAULT });
             let mut golden = Golden::new();
             let (mut got, mut want) = (Vec::new(), Vec::new());
             let mut scroll = false;
@@ -753,7 +786,7 @@ mod tests {
     fn matches_firmware_on_recorded_trace() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/traces/2026-10-13-relative-all.log");
         let text = std::fs::read_to_string(path).expect("trace log in tools/traces");
-        let mut relay = Relay::new(Config::FIRMWARE_DEFAULT);
+        let mut relay = Relay::new(Config { scroll_invert: false, ..Config::FIRMWARE_DEFAULT });
         let mut golden = Golden::new();
         let (mut got, mut want) = (Vec::new(), Vec::new());
         let mut lines = 0usize;

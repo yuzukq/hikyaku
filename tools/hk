@@ -75,7 +75,7 @@ cmd_build() {
   [ -f "$PEERFILE" ] && peer="$(cat "$PEERFILE")"
   # usb-log はログの出し先を既定（UART）から切り替えるので、既定の feature を外す
   local nodef=""
-  case " $FEATURES " in *" usb-log "*) nodef="--no-default-features" ;; esac
+  case " $FEATURES " in *" usb-log "*|*" serial-bridge "*) nodef="--no-default-features" ;; esac
   c_info "ビルド中（features: $FEATURES）"
   (cd "$FW" && HIKYAKU_OTA_KEY="$key" HIKYAKU_OTA_PEER="$peer" cargo build --release $nodef --features "$FEATURES")
   c_ok "ビルド完了"

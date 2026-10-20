@@ -39,12 +39,15 @@ tools/scripts/       検証用スクリプト（ble_rx.py, uart_cap.py）
   | `usb-trace` | USB キーボードのレポートを 1 つずつログに出す（OTA の組み合わせキーの切り分け用） |
   | `trackpad-probe` | 起動時に DR・MISO のピンの状態と、GPIO9〜13 の短絡を調べてログに出す（テスターなしの配線の切り分け。診断のときだけ） |
   | `usb-log` | ログを S3 の USB-C に出す（キーボード用の USB ホストは止まる。下の「CH9102F なしでログを見る」） |
+  | `serial-bridge` | 試験用。`usb-log` に加え、PC から USB シリアルで届くキー入力を USB キーボードの代わりに使う（下の「PC のキーボードで試す」） |
 
   1 秒ごとの集計ログ `trackpad: packets= reports= dropped= max_gap_ms= ...`: `dropped` は BLE へ送るキューがいっぱいで捨てた数、
   `max_gap_ms` は読み取りの間隔の最大（タスクが止まっていないか）。2026-10-15 の実機ではどちらも問題なし（0 と 6ms）。
 - **LED（`src/bin/led/`）:** ボード（ESP32-S3 SuperMini）の GPIO48 の RGB LED（WS2812 互換）を RMT で駆動。トラックパッドの初期化中は**赤**（触らない。起動時のキャリブレーションが狂う）、
   終わったら**緑**、パッドが見つからない（ID が 0x07 でない）と**青**。LED は最後の色を保持するので、書き込み中や再起動の直前も前の色のまま。
   ボードの青い点滅は電池の充電表示（電池なし）で、ファームとは関係ない。
+  USB キーボードの状態（診断用）: 認識したら**白**に一瞬、最初のキー入力で**水色**に一瞬。失敗したら色を残す（認識の失敗 = **黄**、ブートキーボードが無い = **紫**、読み取りエラー = **オレンジ**）。
+- **スクロール:** キーボードの **F24** を押している間、トラックパッドの上下の動きを縦スクロールにする（`forward_key` で F24 を取り除き、`trackpad::SCROLL_MODE` を立てる）。
 - **ログ:** 既定（feature `log-uart`）は `esp-println` の UART0（GPIO43 = ボードの TX ピン）へ。USB シリアルはホスト動作中に使えないため。`usb-log` では USB シリアル/JTAG へ。
 
 ## ビルド
@@ -96,6 +99,10 @@ FEATURES="trackpad trackpad-trace" tools/hk flash   # 機能を変えてビル�
 FEATURES="trackpad usb-log trackpad-probe trackpad-selftest" tools/hk flash   # S3 を PC に直結（5V のジャンパーは抜く）
 tools/hk usb-log 20                                                          # ログを 20 秒読む
 ```
+
+**PC のキーボードで試す（キーボードが手元にないとき）:** `FEATURES="trackpad serial-bridge" tools/hk flash` を書き込み、S3 を PC に直結したまま
+`cargo run -q -p hid-probe -- evbridge /dev/ttyACM0` を動かす。evdev（既定は keyd の仮想キーボード）のキー入力を S3 へ送り、S3 が BLE で Mac へ流す。
+**Esc を 200ms 以上押すと F24**（スクロールの試験用）、短く押せば Esc。入力はデスクトップにも届くので、何も起きないウィンドウにフォーカスしておく。
 
 `trackpad-probe` は起動時に、SPI を使う前のピンの状態（DR、MISO のプルアップ/プルダウン）と、GPIO9〜13 の短絡検査
 （1 本ずつ駆動して、ほかのピンがつられるか・駆動したレベルにならないか）をログに出す。テスターなしで配線を切り分けられる
