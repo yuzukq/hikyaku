@@ -7,10 +7,41 @@ import CoreAudio
 import RingCore
 
 /// ノブの表示に使う、今の値。
+///
+/// 回すたびに読み直すと、hikyaku 経由のキーが効くまで待つことになり表示が指に遅れる。
+/// そこで 1 段階ごとに見込みの値へすぐ進め（`stepped`）、回し終えてから本当の値を読み直す。
 struct KnobReadout: Equatable {
-    var text: String
-    /// 0〜1（分からなければ nil）
-    var fraction: Double?
+    /// 音量は 0〜1、シークは秒
+    var value: Double
+    /// 0 なら値を出さない（message だけ）
+    var maximum: Double
+    /// 1 段階で変わる量
+    var step: Double
+    var isClock = false
+    var message: String?
+
+    /// 0〜1（分からなければ nil）。partialSteps は 1 段階に満たない回転（段階の何割か）で、ゲージを指に合わせて動かす
+    func fraction(partialSteps: Double = 0) -> Double? {
+        guard maximum > 0 else { return nil }
+        return min(max((value + partialSteps * step) / maximum, 0), 1)
+    }
+
+    var text: String {
+        if let message { return message }
+        if isClock { return "\(clock(value)) / \(clock(maximum))" }
+        return "\(Int((value / maximum * 100).rounded()))%"
+    }
+
+    func stepped(_ steps: Int) -> KnobReadout {
+        var r = self
+        r.value = min(max(value + Double(steps) * step, 0), maximum)
+        return r
+    }
+
+    private func clock(_ seconds: Double) -> String {
+        let s = max(Int(seconds), 0)
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
 }
 
 @MainActor
@@ -43,25 +74,20 @@ struct ActionRunner {
     }
 
     /// 今の値（音量・再生位置）。明るさは読めないので nil。
-    func readout(_ kind: KnobKind) -> KnobReadout? {
+    func readout(_ kind: KnobKind, tuning: RingTuning) -> KnobReadout? {
         switch kind {
         case .volume:
+            // 音量キー 1 回 = 1/16
             guard let v = SystemVolume.read() else { return nil }
-            return KnobReadout(text: "\(Int((v * 100).rounded()))%", fraction: v)
+            return KnobReadout(value: v, maximum: 1, step: 1.0 / 16)
         case .brightness:
             return nil
         case .seek:
             guard let player = MusicPlayer.current(), let (position, duration) = player.position() else {
-                return KnobReadout(text: "再生中のアプリなし", fraction: nil)
+                return KnobReadout(value: 0, maximum: 0, step: 0, message: "再生中のアプリなし")
             }
-            let fraction = duration > 0 ? min(max(position / duration, 0), 1) : nil
-            return KnobReadout(text: "\(clock(position)) / \(clock(duration))", fraction: fraction)
+            return KnobReadout(value: position, maximum: duration, step: tuning.seekStepSeconds, isClock: true)
         }
-    }
-
-    private func clock(_ seconds: Double) -> String {
-        let s = max(Int(seconds), 0)
-        return String(format: "%d:%02d", s / 60, s % 60)
     }
 }
 

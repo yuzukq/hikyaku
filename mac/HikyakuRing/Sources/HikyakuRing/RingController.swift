@@ -79,11 +79,12 @@ final class RingController {
                 actions.run(config.items[item].action)
             case .enterKnob(let item):
                 if case .knob(let kind) = config.items[item].action {
-                    knobReadout = actions.readout(kind)
+                    knobReadout = actions.readout(kind, tuning: config.tuning)
                 }
             case .knobStep(let item, let steps):
                 if case .knob(let kind) = config.items[item].action {
                     actions.turn(kind, steps: steps, tuning: config.tuning)
+                    knobReadout = knobReadout?.stepped(steps)
                     refreshReadoutSoon(kind)
                 }
             case .sendClose:
@@ -92,14 +93,14 @@ final class RingController {
         }
     }
 
-    /// メディアキーは hikyaku 経由で少し遅れて効くので、少し待ってから読み直す。
+    /// 回し終えてから本当の値を読み直す（メディアキーは hikyaku 経由で少し遅れて効く。回している間は見込みの値を出す）。
     private func refreshReadoutSoon(_ kind: KnobKind) {
         readoutRefresh?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, case .knob = self.mode else { return }
-            self.knobReadout = self.actions.readout(kind)
+            self.knobReadout = self.actions.readout(kind, tuning: self.config.tuning)
         }
         readoutRefresh = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 }

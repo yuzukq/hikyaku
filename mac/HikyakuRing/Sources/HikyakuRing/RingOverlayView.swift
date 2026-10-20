@@ -117,13 +117,13 @@ private struct KnobView: View {
             Circle()
                 .stroke(Color.white.opacity(0.1), lineWidth: 6)
                 .frame(width: outer * 1.7, height: outer * 1.7)
-            if let fraction = readout?.fraction {
+            // 1 段階に満たない回転の分も足して、指に合わせて動かす
+            if let fraction = readout?.fraction(partialSteps: remainder / stepDegrees) {
                 Circle()
                     .trim(from: 0, to: fraction)
                     .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 6, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                     .frame(width: outer * 1.7, height: outer * 1.7)
-                    .animation(.snappy(duration: 0.2), value: fraction)
             }
 
             // 1 段階に満たない回転を、指の位置から伸びる短い円弧で見せる
