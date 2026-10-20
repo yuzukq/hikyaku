@@ -22,10 +22,11 @@ pub struct Geometry {
 }
 
 impl Geometry {
-    /// 仮の値（仕様上の実用範囲 X 128〜1920・Y 64〜1472 の中心と半分）。実機で測って直す。
-    /// 向きはカーソルと同じ（パッドは 90° 回して付けている）。
+    /// 中心と半径は仮の値（仕様上の実用範囲 X 128〜1920・Y 64〜1472 の中心と半分）。実機で測って直す。
+    /// 向き: X と Y を入れ替え、上下だけ反転する（2026-10-21 実機で確認）。カーソル（相対モード）は左右も反転しているが、
+    /// 絶対座標では左右の向きが逆に出るので、左右は反転しない。
     pub const DEFAULT: Geometry =
-        Geometry { cx: 1024, cy: 768, rx: 896, ry: 704, swap_xy: true, invert_x: true, invert_y: true };
+        Geometry { cx: 1024, cy: 768, rx: 896, ry: 704, swap_xy: true, invert_x: false, invert_y: true };
 }
 
 /// パッドの座標 → （角度 0.01° 単位 0〜35999、距離 0〜、半径 = 1000）。
@@ -170,13 +171,13 @@ mod tests {
     }
 
     #[test]
-    fn orientation_matches_the_cursor_mapping() {
-        // カーソルの変換と同じ: 画面の x = -(パッドの y)、画面の y = -(パッドの x)
+    fn orientation_matches_the_pad_on_the_board() {
+        // 実機（2026-10-21）: 画面の x = パッドの y、画面の y = -(パッドの x)
         let g = Geometry { cx: 1000, cy: 1000, rx: 500, ry: 500, ..Geometry::DEFAULT };
         // パッドの x が小さい側 → 画面の y が + → 下（180°）
         assert_eq!(polar(&g, 500, 1000).0 / 100, 180);
-        // パッドの y が小さい側 → 画面の x が + → 右（90°）
-        assert_eq!(polar(&g, 1000, 500).0 / 100, 90);
+        // パッドの y が大きい側 → 画面の x が + → 右（90°）
+        assert_eq!(polar(&g, 1000, 1500).0 / 100, 90);
     }
 
     #[test]
