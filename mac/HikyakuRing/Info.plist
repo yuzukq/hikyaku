@@ -26,6 +26,17 @@
 	<string>接続中の hikyaku から、パッドに触れている位置を受け取り、キーやメディアキーの送出を頼むために使います。</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Spotify・ミュージックの再生位置を動かす（シーク）ために使います。</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>dev.hikyaku.ring</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>hikyaku-ring</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

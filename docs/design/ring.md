@@ -115,6 +115,9 @@ cd mac/HikyakuRing && swift test  # 通信の形式・選択・ノブの計算�
 - 構成: `RingCore`（形式 `Protocol.swift`、状態遷移 `RingMachine.swift`、設定 `Config.swift`、キーの対応 `Keys.swift`）と、
   アプリ（BLE `RingLink.swift`、つなぎ役 `RingController.swift`、表示 `OverlayPanel.swift`・`RingOverlayView.swift`、
   実行 `Actions.swift`、設定画面 `SettingsView.swift`）。
+- 7sPro なしで開く: **⌃⌥R**（全体のホットキー。開いていれば閉じる）か `open -g hikyaku-ring://open`（`close`・`toggle` も）。
+  どちらもアプリから `02` / `01` を送るだけで、F23 と同じ動き。Mac で押した F23 は hikyaku に届かない
+  （ファームが F23 を見るのは 7sPro からの USB 入力だけ。Mac → hikyaku の HID は LED の出力レポートしかない）。
 - ログ: `log stream --predicate 'subsystem == "dev.hikyaku.ring"' --info`
 - 設定: `~/Library/Application Support/HikyakuRing/config.json`（なければ標準の 8 項目）。
 - キーの記録: ⌘Space のように Mac が先に取るキーは記録できないので、キーだけ記録して修飾キーのボタンで足す。

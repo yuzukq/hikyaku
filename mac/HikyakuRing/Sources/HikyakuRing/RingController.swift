@@ -46,6 +46,10 @@ final class RingController {
         link.send(.open)
     }
 
+    func toggleRing() {
+        mode == .closed ? openRing() : closeRing()
+    }
+
     func closeRing() {
         apply(machine.close())
     }

@@ -5,7 +5,9 @@ import SwiftUI
 
 @main
 struct HikyakuRingApp: App {
-    @State private var controller = RingController()
+    // URL と全体のホットキーを受けるために AppDelegate を使う。controller もそこで持つ
+    @NSApplicationDelegateAdaptor private var trigger: HostTrigger
+    private var controller: RingController { trigger.controller }
 
     var body: some Scene {
         MenuBarExtra {
@@ -30,6 +32,7 @@ private struct MenuContent: View {
         Divider()
         if controller.mode == .closed {
             Button("リングを開く") { controller.openRing() }
+                .keyboardShortcut("r", modifiers: [.control, .option])
                 .disabled(!controller.status.isReady)
         } else {
             Button("リングを閉じる") { controller.closeRing() }
