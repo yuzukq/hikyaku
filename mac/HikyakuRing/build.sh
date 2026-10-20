@@ -22,6 +22,8 @@ codesign --force --sign "${identity:--}" "$app"
 echo "built $app (signed: ${identity:-ad-hoc})"
 
 if [ "${1:-}" = "--open" ]; then
+    # 終わりきる前に open すると、終了中の古いものを指すだけで新しいものが起動しない
     pkill -x HikyakuRing || true
+    while pgrep -x HikyakuRing >/dev/null; do sleep 0.1; done
     open "$app"
 fi
