@@ -25,12 +25,39 @@ use esp_hal::{
 };
 use hikyaku_pinnacle::{Attenuation, Pinnacle, RelativeOptions};
 use hikyaku_pointer::relative::{Config as RelayConfig, Relay, SoftTap, StillFilter};
+use hikyaku_pointer::ring::{self, Event as RingEvent, Geometry};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use log::{info, warn};
 
 use crate::{Report, REPORTS};
 
 /// true の間、トラックパッドの動きをスクロールに変換する。USB キーボードの F24 を押している間 true（`main.rs` の `usb_host`）。
 pub static SCROLL_MODE: AtomicBool = AtomicBool::new(false);
+
+/// ショートカットリング（docs/design/ring.md）への要求。F23（`main.rs` の `forward_key`）と、アプリからの書き込み（ring.ctrl）から来る。
+#[derive(Clone, Copy)]
+pub enum RingCmd {
+    Toggle,
+    Open,
+    Close,
+}
+pub static RING_CMD: Signal<CriticalSectionRawMutex, RingCmd> = Signal::new();
+/// Mac アプリ（または試験用のクライアント）が接続して HELLO を送ってきたか。false の間は F23 でリングを開かない。
+pub static APP_PRESENT: AtomicBool = AtomicBool::new(false);
+/// リングを開いている間 true（Esc で閉じるため、`forward_key` が見る）。
+pub static RING_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// リングを開いた後、この時間触れなければ閉じる。
+const RING_IDLE_CLOSE_MS: u32 = 5000;
+/// リング中（絶対座標モード）の ZIdle。指を離した後に z=0 のパケットをこの数だけ送らせて、離したことを知る。
+const RING_Z_IDLE: u8 = 5;
+/// パッドの円の位置と向き（仮。実機で測って直す。tools/ring/ring_view.py が生の値の範囲を出す）。
+const RING_GEOMETRY: Geometry = Geometry::DEFAULT;
+
+fn send_ring(ev: RingEvent, seq: &mut u8) {
+    let _ = REPORTS.try_send(Report::Ring(ev.encode(*seq)));
+    *seq = seq.wrapping_add(1);
+}
 
 /// SPI の読み書きの総当たりテスト。パッドを触らなくても、レジスタに既知のパターンを書いて読み戻すだけで、
 /// 「SPI の読み取りが正しいか」を判定できる（MSB が落ちる、ビットがずれる、など）。
@@ -207,11 +234,69 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
     let (mut dropped, mut max_gap_ms) = (0u32, 0u64);
     let mut last_poll = Instant::now();
     let mut last_log = Instant::now();
+    // リングを開いている間: 最後に触れていた時刻（閉じる判定用）
+    let mut ring_last_touch: Option<u32> = None;
+    let mut ring_seq = 0u8;
 
     loop {
         max_gap_ms = max_gap_ms.max(last_poll.elapsed().as_millis());
         last_poll = Instant::now();
         let now = Instant::now().as_millis() as u32;
+
+        // リングの開閉
+        let ring_open = ring_last_touch.is_some();
+        let want = RING_CMD.try_take().map(|c| match c {
+            RingCmd::Open => true,
+            RingCmd::Close => false,
+            RingCmd::Toggle => !ring_open,
+        });
+        let idle = ring_last_touch.is_some_and(|t| now.wrapping_sub(t) > RING_IDLE_CLOSE_MS);
+        if want == Some(true) && !ring_open && APP_PRESENT.load(Ordering::Relaxed) {
+            // カーソル側の状態を捨てる（押しっぱなしのクリックを残さない）
+            if last_buttons != 0 {
+                let _ = REPORTS.try_send(Report::Mouse([0; 5]));
+                last_buttons = 0;
+            }
+            relay = Relay::new(relay_config());
+            match pad.set_absolute(&mut Delay::new(), true, RING_Z_IDLE) {
+                Ok(()) => {
+                    info!("ring: open");
+                    ring_last_touch = Some(now);
+                    RING_ACTIVE.store(true, Ordering::Relaxed);
+                    send_ring(RingEvent::Opened, &mut ring_seq);
+                }
+                Err(_) => warn!("ring: could not switch to absolute mode"),
+            }
+        } else if ring_open && (want == Some(false) || idle) {
+            info!("ring: close{}", if idle { " (idle)" } else { "" });
+            if pad.set_absolute(&mut Delay::new(), false, REL_OPTIONS.z_idle).is_err() {
+                warn!("ring: could not switch back to relative mode");
+            }
+            ring_last_touch = None;
+            RING_ACTIVE.store(false, Ordering::Relaxed);
+            send_ring(RingEvent::Closed, &mut ring_seq);
+        }
+
+        // リング中: 絶対座標を読み、角度・距離にしてアプリへ流す（カーソルは動かさない）
+        if let Some(last_touch) = ring_last_touch.as_mut() {
+            match pad.read_absolute() {
+                Ok(Some(a)) => {
+                    let touching = a.z > 0;
+                    let (angle_cdeg, radius) = if touching { ring::polar(&RING_GEOMETRY, a.x, a.y) } else { (0, 0) };
+                    if touching {
+                        *last_touch = now;
+                    }
+                    #[cfg(feature = "trackpad-trace")]
+                    info!("abs {} x={} y={} z={} angle={} r={}", now, a.x, a.y, a.z, angle_cdeg / 100, radius);
+                    send_ring(RingEvent::Position { touching, angle_cdeg, radius, x: a.x, y: a.y, z: a.z }, &mut ring_seq);
+                }
+                Ok(None) => {}
+                Err(_) => errors += 1,
+            }
+            Timer::after(Duration::from_millis(5)).await;
+            continue;
+        }
+
         // 出すレポートを BLE へ流し、集計する
         let mut emit = |r: [u8; 5]| {
             if r[0] & 1 != 0 && last_buttons & 1 == 0 {

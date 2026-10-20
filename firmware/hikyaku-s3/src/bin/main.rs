@@ -82,6 +82,9 @@ enum Report {
     Key([u8; 8]),
     Mouse([u8; 5]),
     Consumer([u8; 2]),
+    /// ショートカットリングのイベント（独自サービス ring.state へ notify。形式は `hikyaku_pointer::ring::Event`）。
+    #[cfg_attr(not(feature = "trackpad"), allow(dead_code))]
+    Ring([u8; 12]),
 }
 
 static REPORTS: Channel<CriticalSectionRawMutex, Report, 32> = Channel::new();
@@ -187,8 +190,21 @@ fn media_report(buf: &[u8]) -> Option<Report> {
 fn forward_key(mut r: [u8; 8]) {
     #[cfg(feature = "trackpad")]
     {
+        use core::sync::atomic::{AtomicBool, Ordering};
         let scroll = hikyaku_hid::take_key(&mut r, hikyaku_hid::KEY_F24);
-        trackpad::SCROLL_MODE.store(scroll, core::sync::atomic::Ordering::Relaxed);
+        trackpad::SCROLL_MODE.store(scroll, Ordering::Relaxed);
+        // F23 を押した瞬間に、ショートカットリングを開く / 閉じる（F23 は Mac に送らない）。
+        static F23_DOWN: AtomicBool = AtomicBool::new(false);
+        let f23 = hikyaku_hid::take_key(&mut r, hikyaku_hid::KEY_F23);
+        if f23 && !F23_DOWN.swap(true, Ordering::Relaxed) {
+            trackpad::RING_CMD.signal(trackpad::RingCmd::Toggle);
+        } else if !f23 {
+            F23_DOWN.store(false, Ordering::Relaxed);
+        }
+        // リング中の Esc は、リングを閉じるのに使う（Mac には送らない）。
+        if trackpad::RING_ACTIVE.load(Ordering::Relaxed) && hikyaku_hid::take_key(&mut r, hikyaku_hid::KEY_ESC) {
+            trackpad::RING_CMD.signal(trackpad::RingCmd::Close);
+        }
     }
     let _ = REPORTS.try_send(Report::Key(r));
 }
@@ -345,6 +361,17 @@ struct Server {
     battery: BatteryService,
     /// OTA（常に存在するが、OTA モード以外では書き込みを拒否する）。末尾に置いて、既存サービスのハンドルを動かさない。
     ota: OtaService,
+    /// ショートカットリング（docs/design/ring.md）。OTA の後ろに足して、既存サービスのハンドルを動かさない。
+    ring: RingService,
+}
+
+/// ショートカットリング。state: hikyaku → アプリ（開いた・閉じた・指の位置。12 バイト）、ctrl: アプリ → hikyaku（HELLO・CLOSE・OPEN）。
+#[gatt_service(uuid = "6b9a0010-6f1e-4b8e-9d57-7f0d0a5b0001")]
+struct RingService {
+    #[characteristic(uuid = "6b9a0011-6f1e-4b8e-9d57-7f0d0a5b0001", read, notify, value = [0; 12])]
+    state: [u8; 12],
+    #[characteristic(uuid = "6b9a0012-6f1e-4b8e-9d57-7f0d0a5b0001", write, write_without_response, value = [0; 8])]
+    ctrl: [u8; 8],
 }
 
 #[gatt_service(uuid = service::HUMAN_INTERFACE_DEVICE)]
@@ -641,6 +668,13 @@ async fn session<P: PacketPool>(
                         }
                         continue;
                     }
+                    // ショートカットリングのアプリからの要求
+                    #[cfg(feature = "trackpad")]
+                    if let GattEvent::Write(w) = &event {
+                        if w.handle() == server.ring.ctrl.handle {
+                            w.with_data(|_, d| ring_ctrl(d));
+                        }
+                    }
                     match &event {
                         GattEvent::Write(w) => w.with_data(|_, d| debug!("gatt write handle={} data={:?}", w.handle(), d)),
                         GattEvent::Read(r) => debug!("gatt read handle={}", r.handle()),
@@ -678,15 +712,38 @@ async fn session<P: PacketPool>(
                 Report::Key(v) => server.hid.keyboard_in.notify(conn, &v, false).await,
                 Report::Mouse(v) => server.hid.mouse_in.notify(conn, &v, false).await,
                 Report::Consumer(v) => server.hid.consumer_in.notify(conn, &v, false).await,
+                Report::Ring(v) => server.ring.state.notify(conn, &v, false).await,
             };
             if let Err(e) = res {
                 warn!("notify failed: {:?}", e);
             }
         }
     };
-    match select3(events, forward, OTA_REQUEST.wait()).await {
+    let end = match select3(events, forward, OTA_REQUEST.wait()).await {
         Either3::Third(()) => SessionEnd::Ota,
         _ => SessionEnd::Disconnected,
+    };
+    // 切断したら、アプリはいない。リングも閉じる。
+    #[cfg(feature = "trackpad")]
+    {
+        trackpad::APP_PRESENT.store(false, core::sync::atomic::Ordering::Relaxed);
+        trackpad::RING_CMD.signal(trackpad::RingCmd::Close);
+    }
+    end
+}
+
+/// ring.ctrl への書き込み（1 バイト目が命令。`hikyaku_pointer::ring::ctrl`）。
+#[cfg(feature = "trackpad")]
+fn ring_ctrl(d: &[u8]) {
+    use hikyaku_pointer::ring::ctrl;
+    match d.first() {
+        Some(&ctrl::HELLO) => {
+            info!("ring: app connected");
+            trackpad::APP_PRESENT.store(true, core::sync::atomic::Ordering::Relaxed);
+        }
+        Some(&ctrl::CLOSE) => trackpad::RING_CMD.signal(trackpad::RingCmd::Close),
+        Some(&ctrl::OPEN) => trackpad::RING_CMD.signal(trackpad::RingCmd::Open),
+        _ => {}
     }
 }
 

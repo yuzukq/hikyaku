@@ -61,6 +61,10 @@ pub fn usage_name(code: u8) -> &'static str {
 
 /// F24 のキーコード（HID Usage 0x73）。hikyaku はこのキーを Mac に送らず、押している間トラックパッドをスクロールにする。
 pub const KEY_F24: u8 = 0x73;
+/// F23（0x72）。hikyaku はこのキーを Mac に送らず、押すたびにショートカットリングを開閉する。
+pub const KEY_F23: u8 = 0x72;
+/// Esc（0x29）。リング中だけ、リングを閉じるのに使う。
+pub const KEY_ESC: u8 = 0x29;
 
 /// ブートキーボードのレポート（8 バイト）からキー `key` を取り除き、残りのキーを前に詰める。取り除いたら true。
 /// 修飾キー（1 バイト目）と予約バイト（2 バイト目）は触らない。

@@ -82,6 +82,8 @@ const FEED1_Y_INVERT: u8 = 0x80;
 
 /// FeedConfig1: Feed Enable
 const FEED_ENABLE: u8 = 1 << 0;
+/// FeedConfig1: 絶対座標モード（0 なら相対モード）
+const FEED_ABSOLUTE: u8 = 1 << 1;
 
 /// 一度に読む最大バイト数。
 pub const MAX_READ: usize = 8;
@@ -97,6 +99,29 @@ pub enum Error<E> {
 
 /// Pinnacle（1CA027）のファームウェア ID。
 pub const FIRMWARE_ID: u8 = 0x07;
+
+/// 絶対座標の 1 サンプル（指の位置と接触の強さ）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Absolute {
+    /// 0〜2047（実用範囲はおよそ 128〜1920）。
+    pub x: u16,
+    /// 0〜2047（実用範囲はおよそ 64〜1472）。
+    pub y: u16,
+    /// 接触の強さ。0 なら指が触れていない（離した直後は ZIdle の数だけ z=0 のパケットが来る）。
+    pub z: u8,
+}
+
+/// 絶対座標パケット（レジスタ 0x12〜0x17）を解釈する。
+///
+/// X・Y とも 11 ビットにマスクする。実機（2026-10-12）で、4 バイト目の bit7（Y の最上位に見えるビット）が座標ではない
+/// 別のフラグとして立ったり立たなかったりした（マスクしないと Y が 2048 跳ぶ）。仕様上の範囲は 11 ビットに収まる。
+pub fn parse_absolute(d: &[u8; 6]) -> Absolute {
+    Absolute {
+        x: (d[2] as u16 | ((d[4] as u16 & 0x0F) << 8)) & 0x7FF,
+        y: (d[3] as u16 | ((d[4] as u16 & 0xF0) << 4)) & 0x7FF,
+        z: d[5] & 0x3F,
+    }
+}
 
 /// 相対モードの 1 サンプル（パッド自身が計算した移動量）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,6 +309,35 @@ impl<SPI: SpiDevice> Pinnacle<SPI> {
             return Ok(None); // データではなく、コマンド完了だけ
         }
         Ok(Some(parse_relative(&d)))
+    }
+
+    /// 相対モードと絶対座標モードを切り替える（FeedConfig1 の bit1 だけを変え、ほかの設定は残す）。
+    /// `z_idle` は、指を離したときに送る「空」パケット（z=0）の数。絶対座標モードでは、離したことを知るのに使う。
+    /// キャリブレーションはやり直さない。
+    pub fn set_absolute<D: DelayNs>(&mut self, delay: &mut D, absolute: bool, z_idle: u8) -> Result<(), Error<SPI::Error>> {
+        let f1 = self.read_reg(reg::FEED_CONFIG1)?;
+        let f1 = if absolute { f1 | FEED_ABSOLUTE } else { f1 & !FEED_ABSOLUTE };
+        self.write_reg(reg::FEED_CONFIG1, f1 | FEED_ENABLE)?;
+        self.write_reg(reg::Z_IDLE, z_idle)?;
+        self.clear_flags_wait(delay)
+    }
+
+    /// 絶対座標モードで、新しいサンプルがあれば読んで返す。
+    pub fn read_absolute(&mut self) -> Result<Option<Absolute>, Error<SPI::Error>> {
+        let st = self.read_reg(reg::STATUS1)?;
+        if st & (status::SW_DR | status::SW_CC) == 0 {
+            if st != 0 {
+                self.clear_flags()?;
+            }
+            return Ok(None);
+        }
+        let mut d = [0u8; 6];
+        self.read_regs(reg::PACKET_BYTE_0, &mut d)?;
+        self.clear_flags()?;
+        if st & status::SW_DR == 0 {
+            return Ok(None);
+        }
+        Ok(Some(parse_absolute(&d)))
     }
 
     /// フラグをクリアして、50µs 待つ（QMK と同じ）。
@@ -523,6 +577,39 @@ mod tests {
         assert_eq!(m.regs[reg::FEED_CONFIG1 as usize], 0x01);
         assert_eq!(m.regs[reg::Z_IDLE as usize], 0);
         assert_eq!(m.era[0x0187] & 0xC0, 0xC0, "sensitivity 4x");
+    }
+
+    #[test]
+    fn parses_absolute_packet_and_masks_bit11() {
+        let a = parse_absolute(&[0, 0, 0x34, 0x12, 0x85, 0x0D]);
+        assert_eq!((a.x, a.y, a.z), (0x534, 0x012, 0x0D));
+        // 4 バイト目の bit7（Y の bit11 に見えるフラグ）は無視する
+        let a = parse_absolute(&[0, 0, 0, 0x52, 0xA2, 0x0D]);
+        assert_eq!(a.y, 0x252);
+    }
+
+    #[test]
+    fn set_absolute_toggles_only_the_mode_bit() {
+        let mut m = Mock::new();
+        m.regs[reg::FEED_CONFIG1 as usize] = 0x01 | 0x40;
+        let mut p = Pinnacle::new(m);
+        p.set_absolute(&mut NoDelay, true, 5).unwrap();
+        assert_eq!(p.spi_mut().regs[reg::FEED_CONFIG1 as usize], 0x03 | 0x40);
+        assert_eq!(p.spi_mut().regs[reg::Z_IDLE as usize], 5);
+        p.set_absolute(&mut NoDelay, false, 0).unwrap();
+        assert_eq!(p.spi_mut().regs[reg::FEED_CONFIG1 as usize], 0x01 | 0x40);
+        assert_eq!(p.spi_mut().regs[reg::Z_IDLE as usize], 0);
+    }
+
+    #[test]
+    fn read_absolute_reads_six_bytes_and_clears() {
+        let mut m = Mock::new();
+        m.regs[reg::STATUS1 as usize] = status::SW_DR;
+        m.regs[0x12..0x18].copy_from_slice(&[0, 0, 0x00, 0x04, 0x34, 0x20]);
+        let mut p = Pinnacle::new(m);
+        let a = p.read_absolute().unwrap().unwrap();
+        assert_eq!((a.x, a.y, a.z), (0x400, 0x304, 0x20));
+        assert_eq!(p.read_absolute().unwrap(), None, "flags were cleared");
     }
 
     #[test]

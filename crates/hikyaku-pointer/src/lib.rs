@@ -7,3 +7,4 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod relative;
+pub mod ring;

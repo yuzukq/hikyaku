@@ -1,0 +1,189 @@
+//! ショートカットリング（docs/design/ring.md）: 絶対座標 → リングの角度・中心からの距離、と BLE で送るイベントの形式。
+//!
+//! 角度は**画面上の向き**で、0° = 上、時計回りに増える（90° = 右）。パッドが 90° 回って付いている分は、
+//! カーソルと同じ向きの補正（`swap_xy`・`invert_x`・`invert_y`）で合わせる。
+//! 距離は、パッドの円の半径を 1000 とした値（中心 = 0、縁 ≒ 1000。外へはみ出すと 1000 を超える）。
+//!
+//! `no_std` で浮動小数の数学関数（atan2・sqrt）が使えないので、近似と整数の平方根で計算する（角度の誤差は 0.1° 未満）。
+
+/// パッドの円の位置と、画面の向きへの補正。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Geometry {
+    /// 円の中心（パッドの座標）。
+    pub cx: i32,
+    pub cy: i32,
+    /// 円の半径（パッドの座標。X と Y で分解能が違うので別々に持つ）。
+    pub rx: i32,
+    pub ry: i32,
+    /// 画面の向きへの補正（カーソルの変換と同じ意味）。
+    pub swap_xy: bool,
+    pub invert_x: bool,
+    pub invert_y: bool,
+}
+
+impl Geometry {
+    /// 仮の値（仕様上の実用範囲 X 128〜1920・Y 64〜1472 の中心と半分）。実機で測って直す。
+    /// 向きはカーソルと同じ（パッドは 90° 回して付けている）。
+    pub const DEFAULT: Geometry =
+        Geometry { cx: 1024, cy: 768, rx: 896, ry: 704, swap_xy: true, invert_x: true, invert_y: true };
+}
+
+/// パッドの座標 → （角度 0.01° 単位 0〜35999、距離 0〜、半径 = 1000）。
+pub fn polar(g: &Geometry, x: u16, y: u16) -> (u16, u16) {
+    // 中心からの位置を、半径 = 1000 に正規化する
+    let nx = (x as i32 - g.cx) * 1000 / g.rx.max(1);
+    let ny = (y as i32 - g.cy) * 1000 / g.ry.max(1);
+    let (mut sx, mut sy) = if g.swap_xy { (ny, nx) } else { (nx, ny) };
+    if g.invert_x {
+        sx = -sx;
+    }
+    if g.invert_y {
+        sy = -sy;
+    }
+    // 画面: sx は右が +、sy は下が +。0° = 上、時計回り → atan2(sx, -sy)
+    let deg = atan2_deg(sx as f32, -sy as f32);
+    let cdeg = ((deg * 100.0) as i32).rem_euclid(36000) as u16;
+    let r = isqrt((sx * sx + sy * sy) as u32).min(u16::MAX as u32) as u16;
+    (cdeg, r)
+}
+
+/// atan2(y, x) を度で返す（-180〜180）。最大誤差 約 0.09°。
+fn atan2_deg(y: f32, x: f32) -> f32 {
+    const PI: f32 = core::f32::consts::PI;
+    if x == 0.0 && y == 0.0 {
+        return 0.0;
+    }
+    let (ax, ay) = (if x < 0.0 { -x } else { x }, if y < 0.0 { -y } else { y });
+    // atan(z) ≈ (π/4)z − z(|z|−1)(0.2447 + 0.0663|z|)（0 ≤ z ≤ 1）
+    let atan01 = |z: f32| PI / 4.0 * z - z * (z - 1.0) * (0.2447 + 0.0663 * z);
+    let a = if ay <= ax { atan01(ay / ax) } else { PI / 2.0 - atan01(ax / ay) };
+    let a = match (x < 0.0, y < 0.0) {
+        (false, false) => a,
+        (true, false) => PI - a,
+        (true, true) => -(PI - a),
+        (false, true) => -a,
+    };
+    a * 180.0 / PI
+}
+
+fn isqrt(n: u32) -> u32 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+/// BLE の独自サービス（ring.state）で送るイベント。12 バイト固定。
+///
+/// | バイト | 内容 |
+/// |---|---|
+/// | 0 | 種類: 1 = 開いた、2 = 閉じた、3 = 位置 |
+/// | 1 | フラグ: bit0 = 触れている |
+/// | 2〜3 | 角度（0.01° 単位、0 = 上・時計回り。リトルエンディアン） |
+/// | 4〜5 | 中心からの距離（半径 = 1000） |
+/// | 6〜7 | パッドの X（生の値。調整用） |
+/// | 8〜9 | パッドの Y（生の値） |
+/// | 10 | Z（接触の強さ） |
+/// | 11 | 通し番号（取りこぼしの確認用） |
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    Opened,
+    Closed,
+    Position { touching: bool, angle_cdeg: u16, radius: u16, x: u16, y: u16, z: u8 },
+}
+
+pub const EVENT_LEN: usize = 12;
+
+impl Event {
+    pub fn encode(&self, seq: u8) -> [u8; EVENT_LEN] {
+        let mut b = [0u8; EVENT_LEN];
+        b[11] = seq;
+        match *self {
+            Event::Opened => b[0] = 1,
+            Event::Closed => b[0] = 2,
+            Event::Position { touching, angle_cdeg, radius, x, y, z } => {
+                b[0] = 3;
+                b[1] = touching as u8;
+                b[2..4].copy_from_slice(&angle_cdeg.to_le_bytes());
+                b[4..6].copy_from_slice(&radius.to_le_bytes());
+                b[6..8].copy_from_slice(&x.to_le_bytes());
+                b[8..10].copy_from_slice(&y.to_le_bytes());
+                b[10] = z;
+            }
+        }
+        b
+    }
+}
+
+/// アプリ → hikyaku（ring.ctrl への書き込み）の 1 バイト目。
+pub mod ctrl {
+    /// アプリが接続した（これを受け取るまで F23 でリングを開かない）。
+    pub const HELLO: u8 = 0x00;
+    /// リングを閉じる（項目を実行した後・キャンセル・ノブモードの終了）。
+    pub const CLOSE: u8 = 0x01;
+    /// リングを開く（アプリのボタンや試験用。F23 と同じ）。
+    pub const OPEN: u8 = 0x02;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PLAIN: Geometry = Geometry { cx: 1000, cy: 1000, rx: 500, ry: 500, swap_xy: false, invert_x: false, invert_y: false };
+
+    #[test]
+    fn angles_are_clockwise_from_up() {
+        // 補正なしなら、パッドの座標 = 画面の座標（x 右、y 下）
+        assert_eq!(polar(&PLAIN, 1000, 500).0 / 100, 0); // 上
+        assert_eq!(polar(&PLAIN, 1500, 1000).0 / 100, 90); // 右
+        assert_eq!(polar(&PLAIN, 1000, 1500).0 / 100, 180); // 下
+        assert_eq!(polar(&PLAIN, 500, 1000).0 / 100, 270); // 左
+        let (a, _) = polar(&PLAIN, 1500, 500); // 右上
+        assert!((4490..=4510).contains(&a), "{a}");
+    }
+
+    #[test]
+    fn radius_is_normalized() {
+        assert_eq!(polar(&PLAIN, 1000, 1000).1, 0);
+        assert_eq!(polar(&PLAIN, 1500, 1000).1, 1000);
+        assert_eq!(polar(&PLAIN, 1250, 1000).1, 500);
+        let r = polar(&PLAIN, 1354, 1354).1; // 45° 方向に半径 ≒ 1000
+        assert!((995..=1005).contains(&r), "{r}");
+    }
+
+    #[test]
+    fn atan2_is_accurate() {
+        for i in 0..360 {
+            let t = (i as f32).to_radians();
+            let (y, x) = (t.sin() * 700.0, t.cos() * 700.0);
+            let want = y.atan2(x).to_degrees();
+            let got = atan2_deg(y, x);
+            let d = (got - want + 540.0).rem_euclid(360.0) - 180.0;
+            assert!(d.abs() < 0.1, "{i}: {got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn orientation_matches_the_cursor_mapping() {
+        // カーソルの変換と同じ: 画面の x = -(パッドの y)、画面の y = -(パッドの x)
+        let g = Geometry { cx: 1000, cy: 1000, rx: 500, ry: 500, ..Geometry::DEFAULT };
+        // パッドの x が小さい側 → 画面の y が + → 下（180°）
+        assert_eq!(polar(&g, 500, 1000).0 / 100, 180);
+        // パッドの y が小さい側 → 画面の x が + → 右（90°）
+        assert_eq!(polar(&g, 1000, 500).0 / 100, 90);
+    }
+
+    #[test]
+    fn encodes_events() {
+        let e = Event::Position { touching: true, angle_cdeg: 9000, radius: 800, x: 0x123, y: 0x456, z: 12 };
+        assert_eq!(e.encode(7), [3, 1, 0x28, 0x23, 0x20, 0x03, 0x23, 0x01, 0x56, 0x04, 12, 7]);
+        assert_eq!(Event::Opened.encode(0)[0], 1);
+        assert_eq!(Event::Closed.encode(0)[0], 2);
+    }
+}
