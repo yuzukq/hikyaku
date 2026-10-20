@@ -13,6 +13,7 @@
 | [handoff.md](handoff.md) | 引き継ぎメモ（現状・作業のルール・やってほしいこと） |
 | [firmware.md](firmware.md) | ファームウェアの構成・ビルド・書き込み・デバッグ・落とし穴 |
 | [design/multi-host.md](design/multi-host.md) | 2 台のマシンの切り替え（検討中の設計メモ） |
+| [design/ring.md](design/ring.md) | ショートカットリング（Mac アプリ）の構想 |
 | [reference/datasheets.md](reference/datasheets.md) | データシート等へのリンクと保管場所 |
 
 進捗と今後の計画は [../ROADMAP.md](../ROADMAP.md)、全体像は [../README.md](../README.md)。
