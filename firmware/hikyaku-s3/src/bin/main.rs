@@ -735,15 +735,24 @@ async fn session<P: PacketPool>(
 /// ring.ctrl への書き込み（1 バイト目が命令。`hikyaku_pointer::ring::ctrl`）。
 #[cfg(feature = "trackpad")]
 fn ring_ctrl(d: &[u8]) {
-    use hikyaku_pointer::ring::ctrl;
-    match d.first() {
-        Some(&ctrl::HELLO) => {
+    use hikyaku_pointer::ring::Command;
+    match Command::parse(d) {
+        Some(Command::Hello) => {
             info!("ring: app connected");
             trackpad::APP_PRESENT.store(true, core::sync::atomic::Ordering::Relaxed);
         }
-        Some(&ctrl::CLOSE) => trackpad::RING_CMD.signal(trackpad::RingCmd::Close),
-        Some(&ctrl::OPEN) => trackpad::RING_CMD.signal(trackpad::RingCmd::Open),
-        _ => {}
+        Some(Command::Close) => trackpad::RING_CMD.signal(trackpad::RingCmd::Close),
+        Some(Command::Open) => trackpad::RING_CMD.signal(trackpad::RingCmd::Open),
+        // アプリの代わりに、本物のキーボード入力として押して離す（アクセシビリティの許可が要らない）
+        Some(Command::Key { modifiers, key }) => {
+            let _ = REPORTS.try_send(Report::Key([modifiers, 0, key, 0, 0, 0, 0, 0]));
+            let _ = REPORTS.try_send(Report::Key([0; 8]));
+        }
+        Some(Command::Consumer(usage)) => {
+            let _ = REPORTS.try_send(Report::Consumer(usage.to_le_bytes()));
+            let _ = REPORTS.try_send(Report::Consumer([0; 2]));
+        }
+        None => warn!("ring: unknown command {:?}", d),
     }
 }
 

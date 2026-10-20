@@ -7,6 +7,7 @@
 //   swift mac/RingProbe/main.swift
 // 初回はターミナルに Bluetooth の許可を求められる（システム設定 → プライバシーとセキュリティ → Bluetooth）。
 // 入力: o + Enter = 開く、c + Enter = 閉じる、q + Enter = 終了。F23 でも開閉できる。
+//       + / - + Enter = 音量（hikyaku からメディアキーを送る）、k + Enter = Command+Space（hikyaku からキーを送る）
 //
 // 仕様: docs/design/ring.md、イベントの形式: crates/hikyaku-pointer/src/ring.rs
 
@@ -112,9 +113,9 @@ final class Probe: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
 
-    func send(_ byte: UInt8) {
+    func send(_ bytes: UInt8...) {
         guard let p = peripheral, let c = ctrl else { return }
-        p.writeValue(Data([byte]), for: c, type: .withResponse)
+        p.writeValue(Data(bytes), for: c, type: .withResponse)
     }
 }
 
@@ -126,6 +127,9 @@ DispatchQueue.global().async {
             case "o": probe.send(0x02)
             case "c": probe.send(0x01)
             case "q": probe.send(0x01); exit(0)
+            case "+": probe.send(0x11, 0xE9, 0x00) // 音量を上げる
+            case "-": probe.send(0x11, 0xEA, 0x00) // 音量を下げる
+            case "k": probe.send(0x10, 0x08, 0x2C) // Command + Space
             default: break
             }
         }

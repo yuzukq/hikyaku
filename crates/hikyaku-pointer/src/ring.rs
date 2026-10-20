@@ -124,12 +124,53 @@ impl Event {
 
 /// アプリ → hikyaku（ring.ctrl への書き込み）の 1 バイト目。
 pub mod ctrl {
-    /// アプリが接続した（これを受け取るまで F23 でリングを開かない）。
+    /// アプリが接続した（これを受け取るまで F23 でリングを開かない）。`[0x00]`
     pub const HELLO: u8 = 0x00;
-    /// リングを閉じる（項目を実行した後・キャンセル・ノブモードの終了）。
+    /// リングを閉じる（項目を実行した後・キャンセル・ノブモードの終了）。`[0x01]`
     pub const CLOSE: u8 = 0x01;
-    /// リングを開く（アプリのボタンや試験用。F23 と同じ）。
+    /// リングを開く（アプリのボタンや試験用。F23 と同じ）。`[0x02]`
     pub const OPEN: u8 = 0x02;
+    /// キーの組み合わせを 1 回押して離す（本物のキーボード入力として Mac に届く）。`[0x10, 修飾キー, キーコード]`
+    /// 修飾キーはブートキーボードと同じビット（bit0 LCtrl, 1 LShift, 2 LAlt(Option), 3 LGui(Command), 4〜7 は右側）。
+    /// キーコードは HID の Usage ID（0 なら修飾キーだけ）。
+    pub const KEY: u8 = 0x10;
+    /// メディアキー（Consumer の Usage）を 1 回押して離す。`[0x11, 下位, 上位]`（リトルエンディアンの 16 ビット）
+    pub const CONSUMER: u8 = 0x11;
+}
+
+/// よく使うメディアキー（HID Consumer Page の Usage ID）。
+pub mod consumer {
+    pub const VOLUME_UP: u16 = 0x00E9;
+    pub const VOLUME_DOWN: u16 = 0x00EA;
+    pub const MUTE: u16 = 0x00E2;
+    pub const BRIGHTNESS_UP: u16 = 0x006F;
+    pub const BRIGHTNESS_DOWN: u16 = 0x0070;
+    pub const PLAY_PAUSE: u16 = 0x00CD;
+    pub const NEXT_TRACK: u16 = 0x00B5;
+    pub const PREV_TRACK: u16 = 0x00B6;
+}
+
+/// アプリからの命令（ring.ctrl に書かれたバイト列を解釈したもの）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Command {
+    Hello,
+    Close,
+    Open,
+    Key { modifiers: u8, key: u8 },
+    Consumer(u16),
+}
+
+impl Command {
+    pub fn parse(d: &[u8]) -> Option<Command> {
+        match *d {
+            [ctrl::HELLO, ..] => Some(Command::Hello),
+            [ctrl::CLOSE, ..] => Some(Command::Close),
+            [ctrl::OPEN, ..] => Some(Command::Open),
+            [ctrl::KEY, modifiers, key, ..] => Some(Command::Key { modifiers, key }),
+            [ctrl::CONSUMER, lo, hi, ..] => Some(Command::Consumer(u16::from_le_bytes([lo, hi]))),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -178,6 +219,19 @@ mod tests {
         assert_eq!(polar(&g, 500, 1000).0 / 100, 180);
         // パッドの y が大きい側 → 画面の x が + → 右（90°）
         assert_eq!(polar(&g, 1000, 1500).0 / 100, 90);
+    }
+
+    #[test]
+    fn parses_commands() {
+        assert_eq!(Command::parse(&[0]), Some(Command::Hello));
+        assert_eq!(Command::parse(&[1]), Some(Command::Close));
+        assert_eq!(Command::parse(&[2]), Some(Command::Open));
+        // Command + Shift + 4（スクリーンショット）
+        assert_eq!(Command::parse(&[0x10, 0x0A, 0x21]), Some(Command::Key { modifiers: 0x0A, key: 0x21 }));
+        assert_eq!(Command::parse(&[0x11, 0xE9, 0x00]), Some(Command::Consumer(consumer::VOLUME_UP)));
+        assert_eq!(Command::parse(&[0x10, 0x08]), None, "too short");
+        assert_eq!(Command::parse(&[]), None);
+        assert_eq!(Command::parse(&[0x7F]), None);
     }
 
     #[test]

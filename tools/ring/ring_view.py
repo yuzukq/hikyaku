@@ -3,6 +3,7 @@
 
 使い方: tools/ring/ring.sh [--addr FF:E4:05:1A:8F:FF]
   o: リングを開く（F23 と同じ）  c: 閉じる  r: 生の値の最小・最大をリセット  q: 終了
+  + / -: 音量（hikyaku からメディアキーを送る）
 
 hikyaku は 1 台としか接続しないので、Mac の Bluetooth を切ってから使う（hikyaku が広告を始める）。
 初回はこの PC と hikyaku をペアリングする（以降は保存された鍵でつながる）。
@@ -101,7 +102,7 @@ class View:
             grid[gy][gx] = "+"
         grid[cy][cx] = "x" if not self.touching else grid[cy][cx]
         rate = self.count / max(time.time() - self.t0, 1e-3)
-        out = ["\x1b[H\x1b[2J", "hikyaku ring  [o]開く [c]閉じる [r]範囲リセット [q]終了\r\n\r\n"]
+        out = ["\x1b[H\x1b[2J", "hikyaku ring  [o]開く [c]閉じる [+/-]音量 [r]範囲リセット [q]終了\r\n\r\n"]
         out += ["  " + "".join(row) + "\r\n" for row in grid]
         out.append(f"\r\n  状態: {'開' if self.open else '閉'}  触れている: {'はい' if self.touching else 'いいえ'}\r\n")
         out.append(f"  角度: {self.angle:6.1f}°  距離: {self.radius:4d}/1000  項目: {sel if sel is not None else '-'}\r\n")
@@ -156,6 +157,8 @@ async def main() -> int:
                     await client.write_gatt_char(CTRL, bytes([OPEN]), response=True)
                 elif k == "c":
                     await client.write_gatt_char(CTRL, bytes([CLOSE]), response=True)
+                elif k in "+-":
+                    await client.write_gatt_char(CTRL, bytes([0x11, 0xE9 if k == "+" else 0xEA, 0x00]), response=True)
                 elif k == "r":
                     view.minmax = None
                     view.draw()
