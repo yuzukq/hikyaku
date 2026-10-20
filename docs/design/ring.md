@@ -1,6 +1,6 @@
 # ショートカットリング（Mac アプリ）仕様
 
-**状態（2026-10-21）: ファームと通信は実装・実機確認済み。Mac アプリ本体はこれから（Mac 上で作る）。**
+**状態（2026-10-21）: ファームと通信は実装・実機確認済み。Mac アプリは `mac/HikyakuRing` に実装（接続・リングの表示・指の位置の強調までは実機で確認。実行・ノブモード・設定画面は実機での確認待ち）。**
 
 丸いトラックパッドを活かして、Logi Options+ の Actions Ring のような**円形のショートカットリング**を Mac に出す。
 Mac 側に hikyaku のフロントエンドとなるネイティブアプリ（Swift / SwiftUI）を作り、パッドに触れている位置をリング上に表示する。
@@ -101,9 +101,25 @@ Mac 側に hikyaku のフロントエンドとなるネイティブアプリ（S
   アプリは「触れている → 触れていない」に変わった**最初の 1 回だけ**を「離した」として扱う。
 - 離す直前のイベントは Z が小さく、位置もぶれやすい。項目の判定は**離す約 50ms 前の位置**で行う。
 
-## Mac アプリ（Mac 上の Claude Code への引き継ぎ）
+## Mac アプリ
 
-Linux ではビルドできないので、Mac で作る。最初に `swift mac/RingProbe/main.swift` が動くことを確かめるとよい（通信の最小例）。
+実装: `mac/HikyakuRing`（SwiftPM。Xcode のプロジェクトは使わない）。
+
+```sh
+mac/HikyakuRing/build.sh --open   # build/HikyakuRing.app を作って起動する（メニューバーに常駐）
+cd mac/HikyakuRing && swift test  # 通信の形式・選択・ノブの計算のテスト
+```
+
+- Bluetooth の許可に Info.plist が要るので、`swift run` ではなく `.app` にまとめて起動する。
+  署名はキーチェーンの「Apple Development」の証明書（なければアドホック。その場合はビルドのたびに許可を聞き直されることがある）。
+- 構成: `RingCore`（形式 `Protocol.swift`、状態遷移 `RingMachine.swift`、設定 `Config.swift`、キーの対応 `Keys.swift`）と、
+  アプリ（BLE `RingLink.swift`、つなぎ役 `RingController.swift`、表示 `OverlayPanel.swift`・`RingOverlayView.swift`、
+  実行 `Actions.swift`、設定画面 `SettingsView.swift`）。
+- ログ: `log stream --predicate 'subsystem == "dev.hikyaku.ring"' --info`
+- 設定: `~/Library/Application Support/HikyakuRing/config.json`（なければ標準の 8 項目）。
+- キーの記録: ⌘Space のように Mac が先に取るキーは記録できないので、キーだけ記録して修飾キーのボタンで足す。
+
+以下は作るときの仕様（実装はこれに沿っている）。
 
 ### 作るもの
 
@@ -139,5 +155,6 @@ Linux ではビルドできないので、Mac で作る。最初に `swift mac/R
 2. ~~Linux: Python の簡易クライアント~~（`tools/ring/ring.sh`）
 3. ~~Mac: 独自サービスを購読できるかの試作~~（`mac/RingProbe`。購読できた）
 4. ~~ファーム: アプリからキーの組み合わせ・メディアキーを送る命令~~（`10`・`11`）
-5. Mac: アプリ本体（リングの UI、選択と実行、ノブモード）
-6. Mac: 設定画面、アクションの種類を増やす（シークなど）
+5. ~~Mac: アプリ本体（リングの UI、選択と実行、ノブモード）~~（`mac/HikyakuRing`。2026-10-21 実装）
+6. ~~Mac: 設定画面、アクションの種類を増やす（シークなど）~~（同上）
+7. Mac: 実機で調整値（キャンセル範囲・ヒステリシス・ノブの角度）を詰める
