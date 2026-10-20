@@ -22,11 +22,11 @@ pub struct Geometry {
 }
 
 impl Geometry {
-    /// 中心と半径は仮の値（仕様上の実用範囲 X 128〜1920・Y 64〜1472 の中心と半分）。実機で測って直す。
+    /// 中心と半径は実測（2026-10-21、縁をなぞった範囲: X 260〜1719・Y 191〜1398）。
     /// 向き: X と Y を入れ替え、上下だけ反転する（2026-10-21 実機で確認）。カーソル（相対モード）は左右も反転しているが、
     /// 絶対座標では左右の向きが逆に出るので、左右は反転しない。
     pub const DEFAULT: Geometry =
-        Geometry { cx: 1024, cy: 768, rx: 896, ry: 704, swap_xy: true, invert_x: false, invert_y: true };
+        Geometry { cx: 989, cy: 794, rx: 729, ry: 603, swap_xy: true, invert_x: false, invert_y: true };
 }
 
 /// パッドの座標 → （角度 0.01° 単位 0〜35999、距離 0〜、半径 = 1000）。

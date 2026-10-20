@@ -51,7 +51,7 @@ pub static RING_ACTIVE: AtomicBool = AtomicBool::new(false);
 const RING_IDLE_CLOSE_MS: u32 = 5000;
 /// リング中（絶対座標モード）の ZIdle。指を離した後に z=0 のパケットをこの数だけ送らせて、離したことを知る。
 const RING_Z_IDLE: u8 = 5;
-/// パッドの円の位置と向き（仮。実機で測って直す。tools/ring/ring_view.py が生の値の範囲を出す）。
+/// パッドの円の位置と向き（実測。測り直すときは tools/ring/ring.sh で縁をなぞると範囲が出る）。
 const RING_GEOMETRY: Geometry = Geometry::DEFAULT;
 
 fn send_ring(ev: RingEvent, seq: &mut u8) {
