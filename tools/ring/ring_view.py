@@ -5,6 +5,7 @@
   o: リングを開く（F23 と同じ）  c: 閉じる  r: 生の値の最小・最大をリセット  q: 終了
 
 hikyaku は 1 台としか接続しないので、Mac の Bluetooth を切ってから使う（hikyaku が広告を始める）。
+初回はこの PC と hikyaku をペアリングする（以降は保存された鍵でつながる）。
 イベントの形式は crates/hikyaku-pointer/src/ring.rs、仕様は docs/design/ring.md。
 """
 import argparse
@@ -18,6 +19,7 @@ import time
 import tty
 
 from bleak import BleakClient, BleakScanner
+from bleak.backends.device import BLEDevice
 
 STATE = "6b9a0011-6f1e-4b8e-9d57-7f0d0a5b0001"
 CTRL = "6b9a0012-6f1e-4b8e-9d57-7f0d0a5b0001"
@@ -120,12 +122,17 @@ async def main() -> int:
     args = ap.parse_args()
 
     print(f"{args.addr} を探しています…（Mac の Bluetooth は切っておく）")
-    dev = await BleakScanner.find_device_by_address(args.addr, timeout=20)
+    dev = await BleakScanner.find_device_by_address(args.addr, timeout=10)
     if dev is None:
-        print("見つからない。hikyaku が Mac とつながったままなら、Mac の Bluetooth を切る。")
-        return 1
+        # この PC とペアリング済みだと、PC がキーボードとして自動で接続していて広告が出ていない。アドレスで直接つなぐ。
+        # BlueZ が知っているデバイスとして、D-Bus のパスで直接つなぐ（スキャンでは見つからないため）。
+        print("広告が見つからない。この PC とペアリング済みとみなして、直接つなぎます（だめなら Mac の Bluetooth を切る）")
+        path = "/org/bluez/hci0/dev_" + args.addr.upper().replace(":", "_")
+        dev = BLEDevice(args.addr, "hikyaku", {"path": path, "props": {}})
     view = View()
-    async with BleakClient(dev) as client:
+    # hikyaku は接続するとペアリング（暗号化）を要求するので、こちらからペアリングする（JustWorks。初回だけ時間がかかる）。
+    # ペアリングすると、この PC でも hikyaku がキーボード・マウスとして見える。
+    async with BleakClient(dev, pair=True, timeout=30) as client:
         await client.start_notify(STATE, lambda _, d: view.on_event(bytes(d)))
         await client.write_gatt_char(CTRL, bytes([HELLO]), response=True)
         view.message = "接続した（HELLO を送った）。o で開く、または F23"
