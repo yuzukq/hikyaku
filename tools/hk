@@ -2,7 +2,7 @@
 # hikyaku の開発用 CLI。
 #
 #   tools/hk build              ファームをビルドする
-#   tools/hk flash              ビルドして、S3 が PC に現れるのを待って書き込む（BOOT を押しながら挿す）
+#   tools/hk flash              ビルドして、S3 が PC に現れるのを待って書き込む（普通に挿すだけ。BOOT は不要）
 #   tools/hk log [秒]           S3 のログを表示する（CH9102F 経由。省略時は Ctrl-C まで）
 #   tools/hk flash-log [秒]     書き込み → 元の構成に戻すのを待って → ログ表示、を続けて行う
 #   tools/hk usb-log [秒]       S3 の USB-C から直接ログを読む（FEATURES に usb-log を入れて書き込んだとき。CH9102F 不要）
@@ -13,7 +13,8 @@
 #
 # 書き込みの手順:
 #   1. S3 から CH9102F の 5V とキーボードを外す（5V がつながったまま PC に挿すと電源がぶつかる）
-#   2. `tools/hk flash` を実行し、「待っています」と出たら BOOT を押しながら S3 を PC に挿す
+#   2. `tools/hk flash` を実行し、「待っています」と出たら S3 を PC に挿す。ファームは起動後 3 秒間 USB ホストにならないので、
+#      その間に書き込みモードへ入れる（BOOT は不要。2026-10-20 確認）。うまくいかないときは BOOT を押しながら挿す
 #   3. 書き込みが終わったら S3 を抜き、キーボードと CH9102F を元に戻す
 set -euo pipefail
 
@@ -86,7 +87,7 @@ cmd_flash() {
   if uart_present && ! s3_present; then
     c_info "注意: CH9102F がつながっています。S3 の 5V から外してから S3 を PC に挿してください。"
   fi
-  c_info "S3 を待っています… BOOT を押しながら S3 を PC に挿してください（Ctrl-C で中止）"
+  c_info "S3 を待っています… S3 を PC に挿してください（BOOT は不要。失敗が続くときだけ BOOT を押しながら。Ctrl-C で中止）"
   local tries=0
   while true; do
     local port
@@ -107,7 +108,7 @@ cmd_flash() {
         c_err "書き込みに 5 回失敗しました。BOOT を押しながら挿し直して、もう一度実行してください。"
         exit 1
       fi
-      c_info "書き込みに失敗。BOOT を押しながら挿し直してください（再試行 $tries/5）"
+      c_info "書き込みに失敗。挿し直してください（続くなら BOOT を押しながら。再試行 $tries/5）"
       # 今のデバイスが消えるまで待つ
       while s3_present; do sleep 0.2; done
     fi
