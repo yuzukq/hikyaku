@@ -38,14 +38,14 @@ pub struct Config {
 impl Config {
     /// ファーム（`trackpad/mod.rs`）の既定値。持ち主が実機で「調子が良い」と確認した設定。
     /// スクロールの向きは 2026-10-20 に反転した（持ち主の Mac で、直感どおりの向きになるように）。
-    /// 2026-10-22: カーソルを 2 → 1.8 倍、スクロールを 8 → 16 で 1 目盛りに（どちらも持ち主の希望で減らした）。
+    /// 2026-10-22: カーソルを 2 → 1.8 倍、スクロールを 8 → 18 で 1 目盛りに（どちらも持ち主の希望で減らした）。
     pub const FIRMWARE_DEFAULT: Config = Config {
         swap_xy: true,
         invert_x: true,
         invert_y: true,
         gain: 9,
         gain_div: 5,
-        scroll_div: 16,
+        scroll_div: 18,
         scroll_invert: true,
         still: None,
         soft_tap: None,
