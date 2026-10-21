@@ -24,6 +24,7 @@ use esp_hal::{
     time::Rate,
 };
 use hikyaku_pinnacle::{Attenuation, Pinnacle, RelativeOptions};
+use hikyaku_pointer::button::{Action as ButtonAction, Button, Timing as ButtonTiming};
 use hikyaku_pointer::relative::{Config as RelayConfig, Relay, SoftTap, StillFilter};
 use hikyaku_pointer::ring::{self, Event as RingEvent, Geometry};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
@@ -32,6 +33,7 @@ use log::{info, warn};
 use crate::{Report, REPORTS};
 
 /// true の間、トラックパッドの動きをスクロールに変換する。USB キーボードの F24 を押している間 true（`main.rs` の `usb_host`）。
+/// 本体のボタン（GPIO8）を押している間も、スクロールになる（こちらはこのタスクの中で見ている）。
 pub static SCROLL_MODE: AtomicBool = AtomicBool::new(false);
 
 /// ショートカットリング（docs/design/ring.md）への要求。F23（`main.rs` の `forward_key`）と、アプリからの書き込み（ring.ctrl）から来る。
@@ -53,6 +55,12 @@ const RING_IDLE_CLOSE_MS: u32 = 5000;
 const RING_Z_IDLE: u8 = 5;
 /// パッドの円の位置と向き（実測。測り直すときは tools/ring/ring.sh で縁をなぞると範囲が出る）。
 const RING_GEOMETRY: Geometry = Geometry::DEFAULT;
+
+/// 本体のボタン（GPIO8 と GND の間の MX スイッチ）の判定の時間。単押し = 右クリック、長押し中 = スクロール、
+/// ダブルタップ = リング（`hikyaku_pointer::button`）。右クリックはダブルタップを待つ分（`double_gap_ms`）遅れて出る。
+const BUTTON_TIMING: ButtonTiming = ButtonTiming::DEFAULT;
+/// 右クリックで右ボタンを押しておく時間。
+const RIGHT_CLICK_MS: u32 = 30;
 
 fn send_ring(ev: RingEvent, seq: &mut u8) {
     let _ = REPORTS.try_send(Report::Ring(ev.encode(*seq)));
@@ -190,7 +198,7 @@ fn relay_config() -> RelayConfig {
 /// 相対モード（既定）。ZMK（Zephyr の input_pinnacle）や Cirque 公式の USB マウスのサンプルと同じく、
 /// **パッドが計算した移動量をそのまま**（向きを合わせ、`REL_GAIN` 倍して）マウスレポートにする（加速は OS に任せる）。
 #[embassy_executor::task]
-pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'static>) {
+pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'static>, button_pin: Input<'static>) {
     let dev = match ExclusiveDevice::new(spi, cs, Delay::new()) {
         Ok(d) => d,
         Err(_) => {
@@ -237,11 +245,35 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
     // リングを開いている間: 最後に触れていた時刻（閉じる判定用）
     let mut ring_last_touch: Option<u32> = None;
     let mut ring_seq = 0u8;
+    // 本体のボタン（押すと Low）。right_until = 右クリックで右ボタンを押している間、離す時刻
+    let mut button = Button::new(BUTTON_TIMING);
+    let mut right_until: Option<u32> = None;
 
     loop {
         max_gap_ms = max_gap_ms.max(last_poll.elapsed().as_millis());
         last_poll = Instant::now();
         let now = Instant::now().as_millis() as u32;
+
+        // 本体のボタン
+        let action = button.update(now, button_pin.is_low());
+        if let Some(a) = action {
+            info!("button: {:?}", a);
+        }
+        match action {
+            Some(ButtonAction::RingToggle) => RING_CMD.signal(RingCmd::Toggle),
+            // リング中は右クリックしない（カーソルを止めている）
+            Some(ButtonAction::RightClick) if ring_last_touch.is_none() => {
+                last_buttons |= 2;
+                let _ = REPORTS.try_send(Report::Mouse([last_buttons, 0, 0, 0, 0]));
+                right_until = Some(now.wrapping_add(RIGHT_CLICK_MS));
+            }
+            _ => {}
+        }
+        if right_until.is_some_and(|t| now.wrapping_sub(t) < u32::MAX / 2) {
+            last_buttons &= !2;
+            let _ = REPORTS.try_send(Report::Mouse([last_buttons, 0, 0, 0, 0]));
+            right_until = None;
+        }
 
         // リングの開閉
         let ring_open = ring_last_touch.is_some();
@@ -257,6 +289,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
                 let _ = REPORTS.try_send(Report::Mouse([0; 5]));
                 last_buttons = 0;
             }
+            right_until = None;
             relay = Relay::new(relay_config());
             match pad.set_absolute(&mut Delay::new(), true, RING_Z_IDLE) {
                 Ok(()) => {
@@ -297,8 +330,10 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
             continue;
         }
 
-        // 出すレポートを BLE へ流し、集計する
-        let mut emit = |r: [u8; 5]| {
+        // 出すレポートを BLE へ流し、集計する（右クリックの途中なら、右ボタンを押したままにする）
+        let right = if right_until.is_some() { 2 } else { 0 };
+        let mut emit = |mut r: [u8; 5]| {
+            r[0] |= right;
             if r[0] & 1 != 0 && last_buttons & 1 == 0 {
                 clicks += 1;
             }
@@ -316,7 +351,11 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
                 max_step = max_step.max((r.dx as i32).abs()).max((r.dy as i32).abs());
                 #[cfg(feature = "trackpad-trace")]
                 info!("rel {} raw={:02x?} dx={} dy={}", now, r.raw, r.dx, r.dy);
-                relay.push(now, &r, SCROLL_MODE.load(Ordering::Relaxed), &mut emit);
+                if button.scrolling() && (r.dx != 0 || r.dy != 0) {
+                    button.moved(); // 押したまま動かした = 長押し（離しても右クリックにしない）
+                }
+                let scroll = SCROLL_MODE.load(Ordering::Relaxed) || button.scrolling();
+                relay.push(now, &r, scroll, &mut emit);
             }
             Ok(None) => relay.poll(now, &mut emit),
             Err(_) => errors += 1,
