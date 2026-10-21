@@ -6,7 +6,8 @@
 - **ショートカットリング**: ファーム（F23 で開く・絶対座標モード・独自サービス）と Mac アプリ `mac/HikyakuRing` が完成し、全機能を実機で確認済み（[design/ring.md](design/ring.md)）。
   7sPro なしでは Mac の ⌃⌥R か `open -g hikyaku-ring://open` で開ける。
 - 書き込みは S3 を挿すだけでよい（BOOT 不要。`tools/hk flash`）。
-- 保留: TOFU60（KBDfans Og60）のキーが通らない件（7sPro が戻ってから）、電力の最適化、CH9102F 経由の給電で BLE が切れる件（はんだの付け直し）。
+- 保留: TOFU60（KBDfans Og60）のキーが通らない件（7sPro が戻ってから）、電力の最適化。
+- CH9102F を新しいものに差し替えた（2026-10-21）。普段の構成のまま `tools/hk log` でログが読める（`usb-log` の版は不要になった）。
 
 ## 2026-10-15 の状態（v1 完成）
 
