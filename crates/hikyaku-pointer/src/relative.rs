@@ -41,7 +41,7 @@ impl Config {
         invert_x: true,
         invert_y: true,
         gain: 2,
-        scroll_div: 12,
+        scroll_div: 14,
         scroll_invert: true,
         still: None,
         soft_tap: None,
