@@ -6,6 +6,9 @@
 //! 3. 動かさずに短く（`tap_max_ms` 以内に）離したら単押しの候補。`double_gap_ms` 以内にもう一度押したらダブルタップ
 //!    （2 回目を押した瞬間にリング）。来なければ右クリック。**右クリックはその分（`double_gap_ms`）遅れて出る。**
 //!
+//! 押した瞬間（`ScrollStart`）に呼び出し側が別の意味に使ったときは、[`Button::ignore_press`] でその押下を捨てる
+//! （ファームは、リングを開いている間の 1 回押しを「閉じる」に使う）。
+//!
 //! 時刻は呼び出し側が与える（ミリ秒、u32 のラップアラウンド可）。チャタリングは、状態が変わってから `debounce_ms` の間の
 //! 変化を無視して吸収する（押した瞬間はすぐ反応する）。
 
@@ -44,8 +47,8 @@ enum State {
     Held { since: u32, moved: bool },
     /// 単押しを離した。2 回目を待っている
     WaitSecond { released: u32 },
-    /// ダブルタップの 2 回目を押している（離すまで何もしない）
-    SecondHeld,
+    /// ダブルタップの 2 回目か、捨てた押下を押している（離すまで何もしない）
+    Ignored,
 }
 
 pub struct Button {
@@ -74,6 +77,13 @@ impl Button {
         }
     }
 
+    /// 今押しているものを捨てる（離すまで何もしない。スクロールも右クリックもしない）。
+    pub fn ignore_press(&mut self) {
+        if let State::Held { .. } = self.state {
+            self.state = State::Ignored;
+        }
+    }
+
     /// ピンの状態（押している = true）を渡す。5ms ごとくらいに呼ぶ。
     pub fn update(&mut self, now: u32, pressed: bool) -> Option<Action> {
         // 2 回目が来ないまま時間切れ → 右クリック
@@ -94,7 +104,7 @@ impl Button {
                 Some(Action::ScrollStart)
             }
             (State::WaitSecond { .. }, true) => {
-                self.state = State::SecondHeld;
+                self.state = State::Ignored;
                 Some(Action::RingToggle)
             }
             (State::Held { since, moved }, false) => {
@@ -102,7 +112,7 @@ impl Button {
                 self.state = if tap { State::WaitSecond { released: now } } else { State::Idle };
                 Some(Action::ScrollEnd)
             }
-            (State::SecondHeld, false) => {
+            (State::Ignored, false) => {
                 self.state = State::Idle;
                 None
             }
@@ -169,6 +179,18 @@ mod tests {
         assert_eq!(actions(&out), [Action::ScrollStart, Action::ScrollEnd, Action::RingToggle]);
         assert_eq!(out[2].0, 200);
         assert!(!b.scrolling(), "the second press does not scroll");
+    }
+
+    #[test]
+    fn an_ignored_press_does_nothing_on_release() {
+        let mut b = Button::new(Timing::DEFAULT);
+        assert_eq!(b.update(10, true), Some(Action::ScrollStart));
+        b.ignore_press();
+        assert!(!b.scrolling());
+        let out: Vec<_> = (11..600).filter_map(|t| b.update(t, t < 80)).collect();
+        assert!(out.is_empty(), "{out:?}");
+        // その後は普通に使える
+        assert_eq!(b.update(700, true), Some(Action::ScrollStart));
     }
 
     #[test]

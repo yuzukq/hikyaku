@@ -57,7 +57,7 @@ const RING_Z_IDLE: u8 = 5;
 const RING_GEOMETRY: Geometry = Geometry::DEFAULT;
 
 /// 本体のボタン（GPIO6 と GND の間の MX スイッチ）の判定の時間。単押し = 右クリック、長押し中 = スクロール、
-/// ダブルタップ = リング（`hikyaku_pointer::button`）。右クリックはダブルタップを待つ分（`double_gap_ms`）遅れて出る。
+/// ダブルタップ = リング（`hikyaku_pointer::button`）。リングを開いている間は、1 回押せばすぐ閉じる。右クリックはダブルタップを待つ分（`double_gap_ms`）遅れて出る。
 const BUTTON_TIMING: ButtonTiming = ButtonTiming::DEFAULT;
 /// 右クリックで右ボタンを押しておく時間。
 const RIGHT_CLICK_MS: u32 = 30;
@@ -174,7 +174,8 @@ const SCREEN_Y_INVERT: bool = true;
 const REL_GAIN: i32 = 2;
 
 /// スクロールモードで、ホイール 1 目盛りに相当する移動量。
-const SCROLL_DIV: i32 = 8;
+/// 2026-10-22: 8 → 10（持ち主の希望で少しだけ遅く）。
+const SCROLL_DIV: i32 = 10;
 
 /// スクロールの向きを反転する（2026-10-20。持ち主の Mac の設定で、反転したほうが直感どおりだった）。
 const SCROLL_INVERT: bool = true;
@@ -260,6 +261,11 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
             info!("button: {:?}", a);
         }
         match action {
+            // リング中（ノブ操作を含む）は、1 回押せば閉じる。その押下はスクロールにも右クリックにもしない
+            Some(ButtonAction::ScrollStart) if ring_last_touch.is_some() => {
+                button.ignore_press();
+                RING_CMD.signal(RingCmd::Close);
+            }
             Some(ButtonAction::RingToggle) => RING_CMD.signal(RingCmd::Toggle),
             // リング中は右クリックしない（カーソルを止めている）
             Some(ButtonAction::RightClick) if ring_last_touch.is_none() => {

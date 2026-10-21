@@ -41,7 +41,7 @@ impl Config {
         invert_x: true,
         invert_y: true,
         gain: 2,
-        scroll_div: 8,
+        scroll_div: 10,
         scroll_invert: true,
         still: None,
         soft_tap: None,
@@ -753,7 +753,7 @@ mod tests {
         // 画面の下向き（sy > 0）の動き 8 で 1 目盛り。反転なしならホイールは -1、反転ありなら +1。
         let pkt = parse_relative(&[0x08, 8, 0]); // パッドの dx=8 → 入れ替え・反転後の画面の sy=-8
         for (invert, want) in [(false, 1i8), (true, -1i8)] {
-            let mut r = Relay::new(Config { scroll_invert: invert, ..Config::FIRMWARE_DEFAULT });
+            let mut r = Relay::new(Config { scroll_invert: invert, scroll_div: 8, ..Config::FIRMWARE_DEFAULT });
             let mut out = Vec::new();
             r.push(0, &pkt, true, |x| out.push(x));
             assert_eq!(out.iter().map(|x| x[3] as i8).sum::<i8>(), want, "invert={invert}");
@@ -764,8 +764,8 @@ mod tests {
     fn matches_firmware_on_random_packets() {
         let mut rng = Lcg(20261013);
         for _ in 0..200 {
-            // Golden は 2026-10-13 時点のファームの写し（スクロールは反転なし）
-            let mut relay = Relay::new(Config { scroll_invert: false, ..Config::FIRMWARE_DEFAULT });
+            // Golden は 2026-10-13 時点のファームの写し（スクロールは反転なし、8 で 1 目盛り）
+            let mut relay = Relay::new(Config { scroll_invert: false, scroll_div: 8, ..Config::FIRMWARE_DEFAULT });
             let mut golden = Golden::new();
             let (mut got, mut want) = (Vec::new(), Vec::new());
             let mut scroll = false;
@@ -786,7 +786,7 @@ mod tests {
     fn matches_firmware_on_recorded_trace() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/traces/2026-10-13-relative-all.log");
         let text = std::fs::read_to_string(path).expect("trace log in tools/traces");
-        let mut relay = Relay::new(Config { scroll_invert: false, ..Config::FIRMWARE_DEFAULT });
+        let mut relay = Relay::new(Config { scroll_invert: false, scroll_div: 8, ..Config::FIRMWARE_DEFAULT });
         let mut golden = Golden::new();
         let (mut got, mut want) = (Vec::new(), Vec::new());
         let mut lines = 0usize;
