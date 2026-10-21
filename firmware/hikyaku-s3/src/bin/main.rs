@@ -523,8 +523,8 @@ async fn main(spawner: Spawner) -> ! {
         .with_miso(peripherals.GPIO13);
         let cs = Output::new(peripherals.GPIO10, Level::High, OutputConfig::default());
         let dr = Input::new(peripherals.GPIO9, InputConfig::default().with_pull(Pull::Down));
-        // 本体のボタン（MX スイッチを GPIO8 と GND の間に。押すと Low）。つないでいなければプルアップで High のまま（何も起きない）。
-        let button = Input::new(peripherals.GPIO8, InputConfig::default().with_pull(Pull::Up));
+        // 本体のボタン（MX スイッチを GPIO7 と GND の間に。押すと Low）。つないでいなければプルアップで High のまま（何も起きない）。
+        let button = Input::new(peripherals.GPIO7, InputConfig::default().with_pull(Pull::Up));
         spawner.spawn(trackpad::run(spi, cs, dr, button).unwrap());
     }
 

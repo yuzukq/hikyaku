@@ -33,7 +33,7 @@ use log::{info, warn};
 use crate::{Report, REPORTS};
 
 /// true の間、トラックパッドの動きをスクロールに変換する。USB キーボードの F24 を押している間 true（`main.rs` の `usb_host`）。
-/// 本体のボタン（GPIO8）を押している間も、スクロールになる（こちらはこのタスクの中で見ている）。
+/// 本体のボタン（GPIO7）を押している間も、スクロールになる（こちらはこのタスクの中で見ている）。
 pub static SCROLL_MODE: AtomicBool = AtomicBool::new(false);
 
 /// ショートカットリング（docs/design/ring.md）への要求。F23（`main.rs` の `forward_key`）と、アプリからの書き込み（ring.ctrl）から来る。
@@ -56,7 +56,7 @@ const RING_Z_IDLE: u8 = 5;
 /// パッドの円の位置と向き（実測。測り直すときは tools/ring/ring.sh で縁をなぞると範囲が出る）。
 const RING_GEOMETRY: Geometry = Geometry::DEFAULT;
 
-/// 本体のボタン（GPIO8 と GND の間の MX スイッチ）の判定の時間。単押し = 右クリック、長押し中 = スクロール、
+/// 本体のボタン（GPIO7 と GND の間の MX スイッチ）の判定の時間。単押し = 右クリック、長押し中 = スクロール、
 /// ダブルタップ = リング（`hikyaku_pointer::button`）。右クリックはダブルタップを待つ分（`double_gap_ms`）遅れて出る。
 const BUTTON_TIMING: ButtonTiming = ButtonTiming::DEFAULT;
 /// 右クリックで右ボタンを押しておく時間。
