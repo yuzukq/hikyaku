@@ -5,7 +5,7 @@
 //!   cargo run -q -p hikyaku-pointer --example replay_rel -- tools/traces/2026-10-13-relative-all.log [key=value ...]
 //!
 //! キー（省略時はファームの既定値）:
-//!   gain=2 swap=1 invx=1 invy=1 scroll_div=14 scroll_invert=1   変換の設定
+//!   gain=9 gain_div=5 swap=1 invx=1 invy=1 scroll_div=16 scroll_invert=1   変換の設定
 //!   still=0                                    1 で静止中のぶれを抑えるフィルタ（trackpad-still-filter）を有効にする
 //!   tap=0                                      1 で自前のタップ判定（trackpad-soft-tap）を有効にする（パッドのタップビットは無視）
 //!   scroll=0                                   1 でスクロールモードとして再生
@@ -28,6 +28,7 @@ fn main() {
         let n: i64 = v.parse().expect("number");
         match k {
             "gain" => cfg.gain = n as i32,
+            "gain_div" => cfg.gain_div = n as i32,
             "swap" => cfg.swap_xy = n != 0,
             "invx" => cfg.invert_x = n != 0,
             "invy" => cfg.invert_y = n != 0,

@@ -21,8 +21,10 @@ pub struct Config {
     pub invert_x: bool,
     /// 画面の Y を反転する（入れ替えの後に適用）。
     pub invert_y: bool,
-    /// 移動量の倍率（整数倍）。
+    /// 移動量の倍率 = `gain / gain_div`（例: 9 / 5 = 1.8 倍）。割り切れない端数は次の動きに持ち越す。
     pub gain: i32,
+    /// 倍率の分母（1 なら整数倍）。
+    pub gain_div: i32,
     /// スクロールモードで、ホイール 1 目盛りに相当する移動量。
     pub scroll_div: i32,
     /// スクロールの向きを反転する。false: 指を下へ動かすとホイールを手前に回したのと同じ（2026-10-13 時点のファームの動き）。
@@ -36,12 +38,14 @@ pub struct Config {
 impl Config {
     /// ファーム（`trackpad/mod.rs`）の既定値。持ち主が実機で「調子が良い」と確認した設定。
     /// スクロールの向きは 2026-10-20 に反転した（持ち主の Mac で、直感どおりの向きになるように）。
+    /// 2026-10-22: カーソルを 2 → 1.8 倍、スクロールを 8 → 16 で 1 目盛りに（どちらも持ち主の希望で減らした）。
     pub const FIRMWARE_DEFAULT: Config = Config {
         swap_xy: true,
         invert_x: true,
         invert_y: true,
-        gain: 2,
-        scroll_div: 14,
+        gain: 9,
+        gain_div: 5,
+        scroll_div: 16,
         scroll_invert: true,
         still: None,
         soft_tap: None,
@@ -250,6 +254,9 @@ pub struct Relay {
     carry_x: i32,
     carry_y: i32,
     carry_wheel: i32,
+    // 倍率が分数のときの、1 未満の端数（gain_div 分の 1 の単位）
+    frac_x: i32,
+    frac_y: i32,
     /// 最後に送ったボタン状態。
     last_buttons: u8,
     still: StillState,
@@ -263,6 +270,8 @@ impl Relay {
             carry_x: 0,
             carry_y: 0,
             carry_wheel: 0,
+            frac_x: 0,
+            frac_y: 0,
             last_buttons: 0,
             still: StillState {
                 moving: false,
@@ -327,8 +336,13 @@ impl Relay {
         if scroll_mode {
             self.carry_wheel += if self.cfg.scroll_invert { sy } else { -sy };
         } else {
-            self.carry_x += sx * self.cfg.gain;
-            self.carry_y += sy * self.cfg.gain;
+            let div = self.cfg.gain_div.max(1);
+            let fx = self.frac_x + sx * self.cfg.gain;
+            let fy = self.frac_y + sy * self.cfg.gain;
+            self.carry_x += fx / div;
+            self.carry_y += fy / div;
+            self.frac_x = fx % div;
+            self.frac_y = fy % div;
         }
     }
 
@@ -418,6 +432,7 @@ mod tests {
             invert_x: false,
             invert_y: false,
             gain: 1,
+            gain_div: 1,
             scroll_div: 8,
             scroll_invert: false,
             still: None,
@@ -634,11 +649,24 @@ mod tests {
     #[test]
     fn firmware_default_orientation() {
         // パッドの dx が負 = 画面の下（SWAP → sy = dx → 反転）
-        let mut r = Relay::new(Config::FIRMWARE_DEFAULT);
+        let mut r = Relay::new(Config { gain: 2, gain_div: 1, ..Config::FIRMWARE_DEFAULT });
         let out = run(&mut r, &[(pkt(0, -5, 0), false)]);
         assert_eq!(out, vec![[0, 0, 10, 0, 0]]); // gain 2
         let out = run(&mut r, &[(pkt(0, 0, 7), false)]);
         assert_eq!(out, vec![[0, (-14i8) as u8, 0, 0, 0]]);
+    }
+
+    #[test]
+    fn fractional_gain_carries_the_remainder() {
+        // 1.8 倍: 1 ずつ 5 回動かすと、合計 9（端数を捨てると 5 になる）。逆向きも同じ
+        let mut r = Relay::new(Config { gain: 9, gain_div: 5, ..plain() });
+        let out = run(&mut r, &[(pkt(0, 1, 0), false); 5]);
+        assert_eq!(out.iter().map(|o| o[1] as i8 as i32).sum::<i32>(), 9);
+        let out = run(&mut r, &[(pkt(0, -1, 0), false); 5]);
+        assert_eq!(out.iter().map(|o| o[1] as i8 as i32).sum::<i32>(), -9);
+        // 大きな動きは 1.8 倍そのまま
+        let out = run(&mut r, &[(pkt(0, 0, 50), false)]);
+        assert_eq!(out, vec![[0, 0, 90, 0, 0]]);
     }
 
     #[test]
@@ -753,7 +781,7 @@ mod tests {
         // 画面の下向き（sy > 0）の動き 8 で 1 目盛り。反転なしならホイールは -1、反転ありなら +1。
         let pkt = parse_relative(&[0x08, 8, 0]); // パッドの dx=8 → 入れ替え・反転後の画面の sy=-8
         for (invert, want) in [(false, 1i8), (true, -1i8)] {
-            let mut r = Relay::new(Config { scroll_invert: invert, scroll_div: 8, ..Config::FIRMWARE_DEFAULT });
+            let mut r = Relay::new(Config { scroll_invert: invert, gain: 2, gain_div: 1, scroll_div: 8, ..Config::FIRMWARE_DEFAULT });
             let mut out = Vec::new();
             r.push(0, &pkt, true, |x| out.push(x));
             assert_eq!(out.iter().map(|x| x[3] as i8).sum::<i8>(), want, "invert={invert}");
@@ -765,7 +793,7 @@ mod tests {
         let mut rng = Lcg(20261013);
         for _ in 0..200 {
             // Golden は 2026-10-13 時点のファームの写し（スクロールは反転なし、8 で 1 目盛り）
-            let mut relay = Relay::new(Config { scroll_invert: false, scroll_div: 8, ..Config::FIRMWARE_DEFAULT });
+            let mut relay = Relay::new(Config { scroll_invert: false, gain: 2, gain_div: 1, scroll_div: 8, ..Config::FIRMWARE_DEFAULT });
             let mut golden = Golden::new();
             let (mut got, mut want) = (Vec::new(), Vec::new());
             let mut scroll = false;
@@ -786,7 +814,7 @@ mod tests {
     fn matches_firmware_on_recorded_trace() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/traces/2026-10-13-relative-all.log");
         let text = std::fs::read_to_string(path).expect("trace log in tools/traces");
-        let mut relay = Relay::new(Config { scroll_invert: false, scroll_div: 8, ..Config::FIRMWARE_DEFAULT });
+        let mut relay = Relay::new(Config { scroll_invert: false, gain: 2, gain_div: 1, scroll_div: 8, ..Config::FIRMWARE_DEFAULT });
         let mut golden = Golden::new();
         let (mut got, mut want) = (Vec::new(), Vec::new());
         let mut lines = 0usize;

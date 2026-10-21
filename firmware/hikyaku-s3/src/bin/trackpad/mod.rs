@@ -171,11 +171,13 @@ const SCREEN_Y_INVERT: bool = true;
 
 /// 移動量の倍率。パッドの相対モードの単位は粗く（31mm のパッドを端から端までなぞって 150〜200 程度）、1:1 では画面上の移動が
 /// 小さすぎる。QMK の相対モードの既定は 4 倍（`scale 1024 / 256`）だが、実機で速すぎたので 2 倍（2026-10-13）。
-const REL_GAIN: i32 = 2;
+/// 2026-10-22: 2 → 1.8 倍（`REL_GAIN / REL_GAIN_DIV`。持ち主の希望で少しだけ遅く）。
+const REL_GAIN: i32 = 9;
+const REL_GAIN_DIV: i32 = 5;
 
 /// スクロールモードで、ホイール 1 目盛りに相当する移動量。
-/// 2026-10-22: 8 → 10 → 12 → 14（持ち主の希望で、指の動きに対するスクロール量を減らした）。
-const SCROLL_DIV: i32 = 14;
+/// 2026-10-22: 8 → 10 → 12 → 14 → 16（持ち主の希望で、指の動きに対するスクロール量を減らした）。
+const SCROLL_DIV: i32 = 16;
 
 /// スクロールの向きを反転する（2026-10-20。持ち主の Mac の設定で、反転したほうが直感どおりだった）。
 const SCROLL_INVERT: bool = true;
@@ -187,6 +189,7 @@ fn relay_config() -> RelayConfig {
         invert_x: SCREEN_X_INVERT,
         invert_y: SCREEN_Y_INVERT,
         gain: REL_GAIN,
+        gain_div: REL_GAIN_DIV,
         scroll_div: SCROLL_DIV,
         scroll_invert: SCROLL_INVERT,
         // 静止中のぶれを抑える（`trackpad-still-filter`）。既定は無効。
