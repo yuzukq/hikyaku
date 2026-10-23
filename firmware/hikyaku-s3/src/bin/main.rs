@@ -22,13 +22,14 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::usb::otg::{embassy_usb_host::Driver as HostDriver, Usb};
 
 use embassy_futures::select::{select, select3, Either, Either3};
-use embassy_usb_driver::host::{pipe, DeviceEvent, UsbHostAllocator, UsbPipe};
+use embassy_usb_driver::host::{pipe, DeviceEvent, UsbHostAllocator, UsbHostController, UsbPipe};
+use embassy_usb_driver::Speed;
 use embassy_usb_driver::{EndpointInfo, EndpointType};
 use embassy_usb_host::{
     bus,
-    class::kbd::{KbdEvent, KbdHandler},
-    control::SetupPacket,
-    handler::{BusRoute, EnumerationInfo, HandlerEvent},
+    control::{ControlPipeExt, SetupPacket},
+    descriptor::ConfigurationDescriptor,
+    handler::{BusRoute, EnumerationInfo},
     BusState,
 };
 use esp_radio::ble::controller::BleConnector;
@@ -116,22 +117,49 @@ fn take_ota_boot_flag() -> bool {
 }
 
 /// 修飾キーに Ctrl・Shift・Alt・Gui（左右どちらでも）がそろい、Enter(0x28) と U(0x18) が押されている。
-fn is_ota_chord(modifiers: u8, keys: &[Option<core::num::NonZeroU8>; 6]) -> bool {
+fn is_ota_chord(modifiers: u8, keys: &[u8]) -> bool {
     let hyper = modifiers & 0x11 != 0 && modifiers & 0x22 != 0 && modifiers & 0x44 != 0 && modifiers & 0x88 != 0;
-    let has = |code: u8| keys.iter().any(|k| k.is_some_and(|k| k.get() == code));
+    let has = |code: u8| keys.contains(&code);
     hyper && has(0x28) && has(0x18)
 }
 
 
-/// キーボードの「マウス + コンシューマ（音量など）」インターフェースを探して、
-/// その割り込み IN パイプを開く。レポート記述子の先頭が Generic Desktop / Mouse のものを選ぶ
-/// （QMK の raw HID など、他の HID インターフェースと区別するため）。
-/// ブートキーボード側で SET_CONFIGURATION 済みである前提（ここでは設定し直さない）。
-async fn open_media_pipe<'d, A: UsbHostAllocator<'d>>(
+/// 認識のときに読んだ構成記述子からブートキーボードのインターフェースを探し、割り込み IN パイプを開く。
+/// ブートプロトコル（SET_PROTOCOL）と SET_IDLE を、それぞれ時間切れ付きで送る（失敗しても進む。QMK は既定でも同じ 8 バイトを送る）。
+///
+/// ライブラリの `KbdHandler::try_register` は使わない。構成記述子を読み直すところで、TOFU60（KBDfans Og60）が
+/// 返事をしなくなり、登録が終わらなかった（2026-10-23）。
+async fn open_keyboard<'d, A: UsbHostAllocator<'d>>(
     alloc: &A,
     info: &EnumerationInfo,
-) -> Option<A::Pipe<pipe::Interrupt, pipe::In>> {
-    let mut ctrl = alloc
+    cfg: &ConfigurationDescriptor<'_>,
+) -> Result<A::Pipe<pipe::Interrupt, pipe::In>, &'static str> {
+    let iface = cfg
+        .iter_interface()
+        .find(|i| i.interface_class == 0x03 && i.interface_subclass == 1 && i.interface_protocol == 1)
+        .ok_or("no boot keyboard interface")?;
+    let ep = iface
+        .iter_endpoints()
+        .find(|e| e.ep_type() == EndpointType::Interrupt && e.ep_dir() == embassy_usb_driver::Direction::In)
+        .ok_or("no interrupt IN endpoint")?;
+    let pipe = alloc
+        .alloc_pipe::<pipe::Interrupt, pipe::In>(info.device_address, &ep.into(), info.split())
+        .map_err(|_| "no pipe")?;
+    let mut ctrl = control_pipe(alloc, info).ok_or("no control pipe")?;
+    const SET_PROTOCOL: u8 = 0x0B;
+    const SET_IDLE: u8 = 0x0A;
+    for (name, request) in [("SET_PROTOCOL(boot)", SET_PROTOCOL), ("SET_IDLE", SET_IDLE)] {
+        match with_timeout(USB_REQUEST_TIMEOUT, ctrl.class_request_out(request, 0, iface.interface_number as u16, &[])).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!("usb: {} failed: {:?}", name, e),
+            Err(_) => warn!("usb: {} timed out", name),
+        }
+    }
+    Ok(pipe)
+}
+
+fn control_pipe<'d, A: UsbHostAllocator<'d>>(alloc: &A, info: &EnumerationInfo) -> Option<A::Pipe<pipe::Control, pipe::InOut>> {
+    alloc
         .alloc_pipe::<pipe::Control, pipe::InOut>(
             info.device_address,
             &EndpointInfo {
@@ -142,11 +170,18 @@ async fn open_media_pipe<'d, A: UsbHostAllocator<'d>>(
             },
             info.split(),
         )
-        .ok()?;
+        .ok()
+}
 
-    let mut cfg_buf = [0u8; 512];
-    let cfg = info.active_config_or_set_default(&mut ctrl, &mut cfg_buf).await.ok()?;
-
+/// キーボードの「マウス + コンシューマ（音量など）」インターフェースを探して、
+/// その割り込み IN パイプを開く。レポート記述子の先頭が Generic Desktop / Mouse のものを選ぶ
+/// （QMK の raw HID など、他の HID インターフェースと区別するため）。構成記述子は認識のときに読んだものを使う。
+async fn open_media_pipe<'d, A: UsbHostAllocator<'d>>(
+    alloc: &A,
+    info: &EnumerationInfo,
+    cfg: &ConfigurationDescriptor<'_>,
+) -> Option<A::Pipe<pipe::Interrupt, pipe::In>> {
+    let mut ctrl = control_pipe(alloc, info)?;
     for iface in cfg.iter_interface() {
         // HID クラスで、ブートキーボード(subclass 1 / protocol 1)以外。
         if iface.interface_class != 0x03 || (iface.interface_subclass == 1 && iface.interface_protocol == 1) {
@@ -158,7 +193,7 @@ async fn open_media_pipe<'d, A: UsbHostAllocator<'d>>(
         let mut rd = [0u8; 256];
         let len = (desc_len as usize).min(rd.len());
         let setup = SetupPacket::get_hid_report_descriptor(iface.interface_number, len as u16);
-        let n = ctrl.control_in(&setup.to_bytes(), &mut rd[..len]).await.ok()?;
+        let n = with_timeout(USB_REQUEST_TIMEOUT, ctrl.control_in(&setup.to_bytes(), &mut rd[..len])).await.ok()?.ok()?;
         if !rd[..n].starts_with(&[0x05, 0x01, 0x09, 0x02]) {
             continue;
         }
@@ -250,6 +285,17 @@ async fn serial_bridge(mut rx: esp_hal::usb::usb_serial_jtag::UsbSerialJtagRx<'s
     }
 }
 
+/// USB の認識・キーボードの登録の 1 段階の時間切れ（ライブラリの制御転送には時間切れがない）。
+const USB_STEP_TIMEOUT: Duration = Duration::from_secs(3);
+/// 失敗したとき、挿し直しを待たずにバスリセットでやり直す回数と、その前に待つ時間。
+const USB_RETRIES: u8 = 3;
+const USB_RETRY_DELAY: Duration = Duration::from_millis(300);
+/// バスリセット（つないだときも含む）の後、問い合わせる前に待つ時間（USB の規格ではリセット後 10ms 以上。
+/// TOFU60 は、リセット直後に問い合わせると応答しなかった）。
+const USB_RESET_RECOVERY: Duration = Duration::from_millis(100);
+/// 制御転送 1 回の時間切れ。
+const USB_REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
+
 /// USB ホスト：つながったキーボード（ブートプロトコル）を読んで REPORTS に流す。
 #[cfg_attr(feature = "usb-log", allow(dead_code))]
 #[embassy_executor::task]
@@ -260,27 +306,53 @@ async fn usb_host(usb: Usb<'static>) {
     Timer::after(Duration::from_secs(3)).await;
     let (mut ctrl, handle) = bus(HostDriver::new(usb), &BUS_STATE);
     let mut cfg = [0u8; 256];
+    // 認識・登録に失敗したとき、挿し直しを待たずにバスリセットでやり直す。retry = やり直すときの速度と回数
+    let mut retry: Option<(Speed, u8)> = None;
 
     loop {
-        info!("usb: waiting for device");
-        let speed = ctrl.wait_for_connection().await;
-        let info = match handle.enumerate(BusRoute::Direct(speed), &mut cfg).await {
-            Ok((info, _)) => info,
-            Err(e) => {
-                warn!("usb: enumerate failed: {:?}", e);
-                led::set(led::YELLOW); // 診断: USB の認識に失敗
+        let (speed, tries) = match retry.take() {
+            Some(r) => r,
+            None => {
+                info!("usb: waiting for device");
+                (ctrl.wait_for_connection().await, 0)
+            }
+        };
+        Timer::after(USB_RESET_RECOVERY).await;
+
+        let (info, n) = match with_timeout(USB_STEP_TIMEOUT, handle.enumerate(BusRoute::Direct(speed), &mut cfg)).await {
+            Ok(Ok(r)) => r,
+            failed => {
+                match failed {
+                    Ok(Err(e)) => warn!("usb: enumerate failed: {:?}", e),
+                    _ => warn!("usb: enumerate timed out"),
+                }
+                if tries < USB_RETRIES {
+                    // つないだ直後に応答しないキーボードがある（TOFU60）。少し待ってバスリセットし、やり直す
+                    warn!("usb: resetting the bus and retrying ({}/{})", tries + 1, USB_RETRIES);
+                    Timer::after(USB_RETRY_DELAY).await;
+                    ctrl.controller_mut().bus_reset().await;
+                    retry = Some((speed, tries + 1));
+                } else {
+                    led::set(led::YELLOW); // 診断: USB の認識に失敗
+                }
                 continue;
             }
         };
         info!(
-            "usb: device {:04x}:{:04x} addr={}",
-            info.device_desc.vendor_id, info.device_desc.product_id, info.device_address
+            "usb: device {:04x}:{:04x} addr={} config {} bytes",
+            info.device_desc.vendor_id, info.device_desc.product_id, info.device_address, n
         );
+        let Ok(config) = ConfigurationDescriptor::try_from_slice(&cfg[..n.min(cfg.len())]) else {
+            warn!("usb: bad configuration descriptor");
+            led::set(led::PURPLE);
+            handle.free_address(info.device_address);
+            continue;
+        };
 
-        let mut kbd = match KbdHandler::try_register(&handle, &info).await {
+        let mut kbd = match open_keyboard(&handle, &info, &config).await {
             Ok(k) => k,
             Err(e) => {
-                warn!("usb: not a boot keyboard: {:?}", e);
+                warn!("usb: not a boot keyboard: {}", e);
                 led::set(led::PURPLE); // 診断: ブートキーボードが見つからない
                 handle.free_address(info.device_address);
                 continue;
@@ -290,10 +362,11 @@ async fn usb_host(usb: Usb<'static>) {
         led::flash(led::WHITE, 300).await; // 診断: キーボードを認識した
         let mut first_key = true;
 
-        let mut media = open_media_pipe(&handle, &info).await;
+        let mut media = open_media_pipe(&handle, &info, &config).await;
         if media.is_none() {
             info!("usb: no media interface (volume/mouse keys will not be forwarded)");
         }
+        let mut kbuf = [0u8; 8];
         let mut mbuf = [0u8; 16];
 
         loop {
@@ -303,7 +376,7 @@ async fn usb_host(usb: Usb<'static>) {
                     None => core::future::pending().await,
                 }
             };
-            match select(select(kbd.wait_for_event(), media_in), ctrl.wait_for_device_event()).await {
+            match select(select(kbd.request_in(&mut kbuf), media_in), ctrl.wait_for_device_event()).await {
                 Either::First(Either::Second(Ok(n))) => {
                     if let Some(r) = media_report(&mbuf[..n]) {
                         let _ = REPORTS.try_send(r);
@@ -313,10 +386,14 @@ async fn usb_host(usb: Usb<'static>) {
                     warn!("usb: media read error: {:?}", e);
                     break;
                 }
-                Either::First(Either::First(Ok(HandlerEvent::HandlerEvent(KbdEvent::KeyStatusUpdate(u))))) => {
+                // ブートキーボードのレポート: 修飾キー, 予約, キー × 6
+                Either::First(Either::First(Ok(n))) if n >= 3 => {
+                    let mut r = [0u8; 8];
+                    r[..n.min(8)].copy_from_slice(&kbuf[..n.min(8)]);
+                    r[1] = 0;
                     #[cfg(feature = "usb-trace")]
-                    info!("usb: key report mods={:#04x} keys={:?}", u.modifiers, u.keypress);
-                    if is_ota_chord(u.modifiers, &u.keypress) {
+                    info!("usb: key report {:02x?}", r);
+                    if is_ota_chord(r[0], &r[2..]) {
                         info!("usb: OTA chord");
                         OTA_REQUEST.signal(());
                         let _ = REPORTS.try_send(Report::Key([0; 8])); // 押しっぱなしを残さない。転送はしない
@@ -326,15 +403,9 @@ async fn usb_host(usb: Usb<'static>) {
                         first_key = false;
                         led::flash(led::CYAN, 200).await; // 診断: 最初のキー入力が届いた
                     }
-                    let mut r = [0u8; 8];
-                    r[0] = u.modifiers;
-                    for (dst, k) in r[2..].iter_mut().zip(u.keypress.iter()) {
-                        *dst = k.map_or(0, |k| k.get());
-                    }
                     forward_key(r);
                 }
-                Either::First(Either::First(Ok(HandlerEvent::HandlerDisconnected))) => break,
-                Either::First(Either::First(Ok(HandlerEvent::NoChange))) => {}
+                Either::First(Either::First(Ok(_))) => {}
                 Either::First(Either::First(Err(e))) => {
                     warn!("usb: read error: {:?}", e);
                     led::set(led::ORANGE); // 診断: キーボードの読み取りエラー
