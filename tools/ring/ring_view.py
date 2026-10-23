@@ -4,6 +4,7 @@
 使い方: tools/ring/ring.sh [--addr FF:E4:05:1A:8F:FF]
   o: リングを開く（F23 と同じ）  c: 閉じる  r: 生の値の最小・最大をリセット  q: 終了
   + / -: 音量（hikyaku からメディアキーを送る）
+  0 / 1 / 2 / 3: 本体の置き方（時計回りに 0° / 90° / 180° / 270°。hikyaku に保存される）
 
 hikyaku は 1 台としか接続しないので、Mac の Bluetooth を切ってから使う（hikyaku が広告を始める）。
 初回はこの PC と hikyaku をペアリングする（以降は保存された鍵でつながる）。
@@ -43,6 +44,7 @@ class View:
         self.t0 = time.time()
         self.message = ""
         self.last_sector = None
+        self.rotation = None
 
     def on_event(self, b: bytes):
         kind, flags, angle, radius, x, y, z, seq = struct.unpack("<BBHHHHBB", b[:12])
@@ -56,6 +58,9 @@ class View:
             self.open = False
             self.touching = False
             self.message = "閉じた"
+        elif kind == 4:
+            self.rotation = flags * 90
+            self.message = f"設定: 本体の置き方 {self.rotation}°"
         elif kind == 3:
             self.count += 1
             was = self.touching
@@ -102,9 +107,10 @@ class View:
             grid[gy][gx] = "+"
         grid[cy][cx] = "x" if not self.touching else grid[cy][cx]
         rate = self.count / max(time.time() - self.t0, 1e-3)
-        out = ["\x1b[H\x1b[2J", "hikyaku ring  [o]開く [c]閉じる [+/-]音量 [r]範囲リセット [q]終了\r\n\r\n"]
+        out = ["\x1b[H\x1b[2J", "hikyaku ring  [o]開く [c]閉じる [+/-]音量 [0-3]置き方 [r]範囲リセット [q]終了\r\n\r\n"]
         out += ["  " + "".join(row) + "\r\n" for row in grid]
-        out.append(f"\r\n  状態: {'開' if self.open else '閉'}  触れている: {'はい' if self.touching else 'いいえ'}\r\n")
+        rot = "?" if self.rotation is None else f"{self.rotation}°"
+        out.append(f"\r\n  状態: {'開' if self.open else '閉'}  触れている: {'はい' if self.touching else 'いいえ'}  置き方: {rot}\r\n")
         out.append(f"  角度: {self.angle:6.1f}°  距離: {self.radius:4d}/1000  項目: {sel if sel is not None else '-'}\r\n")
         x, y, z = self.raw
         out.append(f"  生の値: x={x:4d} y={y:4d} z={z:2d}   受信 {self.count}（{rate:.0f}/秒）  取りこぼし {self.lost}\r\n")
@@ -157,6 +163,8 @@ async def main() -> int:
                     await client.write_gatt_char(CTRL, bytes([OPEN]), response=True)
                 elif k == "c":
                     await client.write_gatt_char(CTRL, bytes([CLOSE]), response=True)
+                elif k in "0123":
+                    await client.write_gatt_char(CTRL, bytes([0x20, int(k)]), response=True)
                 elif k in "+-":
                     await client.write_gatt_char(CTRL, bytes([0x11, 0xE9 if k == "+" else 0xEA, 0x00]), response=True)
                 elif k == "r":

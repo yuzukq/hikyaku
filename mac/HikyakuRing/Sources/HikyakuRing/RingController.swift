@@ -25,10 +25,13 @@ final class RingController {
     /// ノブ: 1 段階に満たない回転（度）。表示で、回している途中が分かるように
     private(set) var knobRemainder: Double = 0
     private(set) var knobReadout: KnobReadout?
+    /// hikyaku 本体の置き方（hikyaku から届いた値）。つながっていない・ファームが古くて返事がないなら nil
+    private(set) var rotation: DeviceRotation?
 
     @ObservationIgnored private var machine: RingMachine
     @ObservationIgnored private let link = RingLink()
     @ObservationIgnored private lazy var overlay = OverlayPanel(controller: self)
+    @ObservationIgnored private lazy var settingsWindow = SettingsWindow(controller: self)
     @ObservationIgnored private lazy var actions = ActionRunner { [link] in link.send($0) }
     @ObservationIgnored private var readoutRefresh: DispatchWorkItem?
 
@@ -36,7 +39,10 @@ final class RingController {
         let config = ConfigStore.load()
         self.config = config
         machine = RingMachine(tuning: config.tuning, actions: config.items.map(\.action))
-        link.onStatus = { [weak self] in self?.status = $0 }
+        link.onStatus = { [weak self] status in
+            self?.status = status
+            if !status.isReady { self?.rotation = nil }
+        }
         link.onEvent = { [weak self] in self?.handle($0) }
         link.start()
     }
@@ -54,7 +60,26 @@ final class RingController {
         apply(machine.close())
     }
 
+    func showSettings() {
+        settingsWindow.show()
+    }
+
+    /// 本体の置き方を変える（hikyaku が保存して、settings のイベントで返す）。
+    func setRotation(_ rotation: DeviceRotation) {
+        link.send(.setRotation(rotation))
+    }
+
+    /// 今の設定を問い合わせる（HELLO の返事を取りこぼしたときや、設定画面を開いたとき）。
+    func requestSettings() {
+        link.send(.getSettings)
+    }
+
     private func handle(_ event: RingEvent) {
+        if case .settings(let rotation) = event {
+            log.info("settings: rotation \(rotation.rawValue * 90)°")
+            self.rotation = rotation
+            return
+        }
         let effects = machine.handle(event, at: ProcessInfo.processInfo.systemUptime)
         if case .position = event, effects.isEmpty {} else {
             log.info("event \(String(describing: event), privacy: .public) → \(String(describing: effects), privacy: .public)")
@@ -76,7 +101,11 @@ final class RingController {
                 readoutRefresh?.cancel()
                 overlay.hide()
             case .run(let item):
-                actions.run(config.items[item].action)
+                if config.items[item].action == .openSettings {
+                    showSettings()
+                } else {
+                    actions.run(config.items[item].action)
+                }
             case .enterKnob(let item):
                 if case .knob(let kind) = config.items[item].action {
                     knobReadout = actions.readout(kind, tuning: config.tuning)

@@ -10,6 +10,7 @@
 //! 実機ログ（`trackpad-trace` の `rel <ms> raw=[b0, b1, b2]` 行）は [`parse_trace_line`] で読める
 //! （`cargo run -p hikyaku-pointer --example replay_rel -- tools/traces/<log>`）。
 
+use crate::Rotation;
 use hikyaku_pinnacle::{parse_relative, Relative};
 
 /// 相対モードの変換の設定。
@@ -27,6 +28,8 @@ pub struct Config {
     pub gain_div: i32,
     /// スクロールモードで、ホイール 1 目盛りに相当する移動量。
     pub scroll_div: i32,
+    /// 本体の置き方（入れ替え・反転の後に回す）。スクロールも回した後の上下で決まる。
+    pub rotation: Rotation,
     /// スクロールの向きを反転する。false: 指を下へ動かすとホイールを手前に回したのと同じ（2026-10-13 時点のファームの動き）。
     pub scroll_invert: bool,
     /// 静止中のぶれを抑えるフィルタ（[`StillFilter`]）。`None` で無効（ファームの既定）。
@@ -46,6 +49,7 @@ impl Config {
         gain: 9,
         gain_div: 5,
         scroll_div: 18,
+        rotation: Rotation::R0,
         scroll_invert: true,
         still: None,
         soft_tap: None,
@@ -290,7 +294,7 @@ impl Relay {
         &self.cfg
     }
 
-    /// パッドの座標系の移動量を、画面の座標系に直す（入れ替え → 反転）。
+    /// パッドの座標系の移動量を、画面の座標系に直す（入れ替え → 反転 → 本体の置き方）。
     pub fn orient(&self, dx: i16, dy: i16) -> (i32, i32) {
         let (mut sx, mut sy) = if self.cfg.swap_xy { (dy as i32, dx as i32) } else { (dx as i32, dy as i32) };
         if self.cfg.invert_x {
@@ -299,7 +303,7 @@ impl Relay {
         if self.cfg.invert_y {
             sy = -sy;
         }
-        (sx, sy)
+        self.cfg.rotation.apply(sx, sy)
     }
 
     /// パケットを 1 つ処理する。出すレポートごとに `emit` を呼ぶ。
@@ -434,6 +438,7 @@ mod tests {
             gain: 1,
             gain_div: 1,
             scroll_div: 8,
+            rotation: Rotation::R0,
             scroll_invert: false,
             still: None,
             soft_tap: None,
@@ -667,6 +672,16 @@ mod tests {
         // 大きな動きは 1.8 倍そのまま
         let out = run(&mut r, &[(pkt(0, 0, 50), false)]);
         assert_eq!(out, vec![[0, 0, 90, 0, 0]]);
+    }
+
+    #[test]
+    fn rotation_turns_cursor_and_scroll() {
+        // 左に 90° 倒して置いた: 本体の右（画面の x+）へ動かすと、画面では上へ
+        let mut r = Relay::new(Config { rotation: Rotation::R270, ..plain() });
+        assert_eq!(run(&mut r, &[(pkt(0, 5, 0), false)]), vec![[0, 0, (-5i8) as u8, 0, 0]]);
+        // スクロールも、置いた向きの上下で決まる（本体の右 = 画面の上 → ホイールは +）
+        let out = run(&mut r, &[(pkt(0, 8, 0), true)]);
+        assert_eq!(out, vec![[0, 0, 0, 1, 0]]);
     }
 
     #[test]

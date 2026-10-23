@@ -15,17 +15,12 @@ struct HikyakuRingApp: App {
         } label: {
             Image(systemName: controller.status.isReady ? "circle.circle.fill" : "circle.circle")
         }
-        // Settings シーンと SettingsLink は、Dock に出ない（LSUIElement）アプリでは開かないことがあるので、普通のウィンドウにする
-        Window("hikyaku リングの設定", id: "settings") {
-            SettingsView(controller: controller)
-        }
-        .windowResizability(.contentSize)
+        // 設定画面は AppKit のウィンドウ（SettingsWindow）。リングの項目からも開けるように
     }
 }
 
 private struct MenuContent: View {
     let controller: RingController
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Text(controller.status.label)
@@ -37,10 +32,7 @@ private struct MenuContent: View {
         } else {
             Button("リングを閉じる") { controller.closeRing() }
         }
-        Button("設定…") {
-            openWindow(id: "settings")
-            NSApp.activate()
-        }
+        Button("設定…") { controller.showSettings() }
         .keyboardShortcut(",")
         Divider()
         Button("終了") {

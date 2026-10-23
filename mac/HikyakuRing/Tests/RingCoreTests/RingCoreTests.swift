@@ -17,6 +17,26 @@ import Testing
     #expect(RingEvent(Data([9] + Array(repeating: 0, count: 11))) == nil)
 }
 
+@Test func parsesSettingsEvent() {
+    // ring.rs の encodes_events と同じバイト列（右に 90°）
+    #expect(RingEvent(Data([4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5])) == .settings(rotation: .r90))
+    #expect(RingEvent(Data([4, 3] + Array(repeating: 0, count: 10))) == .settings(rotation: .r270))
+    #expect(RingEvent(Data([4, 4] + Array(repeating: 0, count: 10))) == nil)
+}
+
+@Test func settingsEventDoesNotTouchTheRing() {
+    var m = RingMachine(actions: RingConfig.standard.items.map(\.action))
+    #expect(m.handle(.opened, at: 0) == [.show])
+    #expect(m.handle(.settings(rotation: .r270), at: 0.01) == [])
+    #expect(m.mode == .selecting(hover: nil))
+}
+
+@Test func openSettingsActionRoundTrips() throws {
+    let config = RingConfig(items: [RingItem(name: "設定", symbol: "gearshape", action: .openSettings)])
+    let data = try JSONEncoder().encode(config)
+    #expect(try JSONDecoder().decode(RingConfig.self, from: data) == config)
+}
+
 @Test func encodesCommands() {
     #expect(RingCommand.hello.bytes == [0x00])
     #expect(RingCommand.close.bytes == [0x01])
@@ -24,6 +44,9 @@ import Testing
     // ⇧⌘4（ring.rs の parses_commands と同じ）
     #expect(RingCommand.key(KeyCombo(modifiers: 0x0A, usage: 0x21)).bytes == [0x10, 0x0A, 0x21])
     #expect(RingCommand.consumer(ConsumerUsage.volumeUp).bytes == [0x11, 0xE9, 0x00])
+    // ring.rs の parses_commands と同じ
+    #expect(RingCommand.setRotation(.r270).bytes == [0x20, 3])
+    #expect(RingCommand.getSettings.bytes == [0x21])
 }
 
 // MARK: - キー

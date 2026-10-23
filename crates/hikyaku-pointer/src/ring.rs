@@ -6,6 +6,8 @@
 //!
 //! `no_std` で浮動小数の数学関数（atan2・sqrt）が使えないので、近似と整数の平方根で計算する（角度の誤差は 0.1° 未満）。
 
+use crate::Rotation;
+
 /// パッドの円の位置と、画面の向きへの補正。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Geometry {
@@ -19,6 +21,8 @@ pub struct Geometry {
     pub swap_xy: bool,
     pub invert_x: bool,
     pub invert_y: bool,
+    /// 本体の置き方（角度に足す）。
+    pub rotation: Rotation,
 }
 
 impl Geometry {
@@ -26,7 +30,7 @@ impl Geometry {
     /// 向き: X と Y を入れ替え、上下だけ反転する（2026-10-21 実機で確認）。カーソル（相対モード）は左右も反転しているが、
     /// 絶対座標では左右の向きが逆に出るので、左右は反転しない。
     pub const DEFAULT: Geometry =
-        Geometry { cx: 989, cy: 794, rx: 729, ry: 603, swap_xy: true, invert_x: false, invert_y: true };
+        Geometry { cx: 989, cy: 794, rx: 729, ry: 603, swap_xy: true, invert_x: false, invert_y: true, rotation: Rotation::R0 };
 }
 
 /// パッドの座標 → （角度 0.01° 単位 0〜35999、距離 0〜、半径 = 1000）。
@@ -43,7 +47,7 @@ pub fn polar(g: &Geometry, x: u16, y: u16) -> (u16, u16) {
     }
     // 画面: sx は右が +、sy は下が +。0° = 上、時計回り → atan2(sx, -sy)
     let deg = atan2_deg(sx as f32, -sy as f32);
-    let cdeg = ((deg * 100.0) as i32).rem_euclid(36000) as u16;
+    let cdeg = ((deg * 100.0) as i32 + g.rotation.quarters() as i32 * 9000).rem_euclid(36000) as u16;
     let r = isqrt((sx * sx + sy * sy) as u32).min(u16::MAX as u32) as u16;
     (cdeg, r)
 }
@@ -84,8 +88,8 @@ fn isqrt(n: u32) -> u32 {
 ///
 /// | バイト | 内容 |
 /// |---|---|
-/// | 0 | 種類: 1 = 開いた、2 = 閉じた、3 = 位置 |
-/// | 1 | フラグ: bit0 = 触れている |
+/// | 0 | 種類: 1 = 開いた、2 = 閉じた、3 = 位置、4 = 設定 |
+/// | 1 | フラグ: bit0 = 触れている（設定のときは、本体の置き方 = 時計回りに 90° を何回か） |
 /// | 2〜3 | 角度（0.01° 単位、0 = 上・時計回り。リトルエンディアン） |
 /// | 4〜5 | 中心からの距離（半径 = 1000） |
 /// | 6〜7 | パッドの X（生の値。調整用） |
@@ -97,6 +101,8 @@ pub enum Event {
     Opened,
     Closed,
     Position { touching: bool, angle_cdeg: u16, radius: u16, x: u16, y: u16, z: u8 },
+    /// 今の設定（HELLO・設定の問い合わせ・変更への返事）。
+    Settings { rotation: Rotation },
 }
 
 pub const EVENT_LEN: usize = 12;
@@ -117,6 +123,10 @@ impl Event {
                 b[8..10].copy_from_slice(&y.to_le_bytes());
                 b[10] = z;
             }
+            Event::Settings { rotation } => {
+                b[0] = 4;
+                b[1] = rotation.quarters();
+            }
         }
         b
     }
@@ -136,6 +146,10 @@ pub mod ctrl {
     pub const KEY: u8 = 0x10;
     /// メディアキー（Consumer の Usage）を 1 回押して離す。`[0x11, 下位, 上位]`（リトルエンディアンの 16 ビット）
     pub const CONSUMER: u8 = 0x11;
+    /// 本体の置き方を変える（フラッシュに保存する）。`[0x20, 時計回りに 90° を何回か（0〜3）]`。返事は設定のイベント
+    pub const SET_ROTATION: u8 = 0x20;
+    /// 今の設定を問い合わせる。`[0x21]`。返事は設定のイベント
+    pub const GET_SETTINGS: u8 = 0x21;
 }
 
 /// よく使うメディアキー（HID Consumer Page の Usage ID）。
@@ -158,6 +172,8 @@ pub enum Command {
     Open,
     Key { modifiers: u8, key: u8 },
     Consumer(u16),
+    SetRotation(Rotation),
+    GetSettings,
 }
 
 impl Command {
@@ -168,6 +184,8 @@ impl Command {
             [ctrl::OPEN, ..] => Some(Command::Open),
             [ctrl::KEY, modifiers, key, ..] => Some(Command::Key { modifiers, key }),
             [ctrl::CONSUMER, lo, hi, ..] => Some(Command::Consumer(u16::from_le_bytes([lo, hi]))),
+            [ctrl::SET_ROTATION, q, ..] => Rotation::from_quarters(q).map(Command::SetRotation),
+            [ctrl::GET_SETTINGS, ..] => Some(Command::GetSettings),
             _ => None,
         }
     }
@@ -177,7 +195,8 @@ impl Command {
 mod tests {
     use super::*;
 
-    const PLAIN: Geometry = Geometry { cx: 1000, cy: 1000, rx: 500, ry: 500, swap_xy: false, invert_x: false, invert_y: false };
+    const PLAIN: Geometry =
+        Geometry { cx: 1000, cy: 1000, rx: 500, ry: 500, swap_xy: false, invert_x: false, invert_y: false, rotation: Rotation::R0 };
 
     #[test]
     fn angles_are_clockwise_from_up() {
@@ -222,6 +241,16 @@ mod tests {
     }
 
     #[test]
+    fn rotation_adds_to_the_angle() {
+        // 左に 90° 倒して置くと、本体の右（90°）が画面の上（0°）になる
+        let g = Geometry { rotation: Rotation::R270, ..PLAIN };
+        assert_eq!(polar(&g, 1500, 1000).0 / 100, 0);
+        assert_eq!(polar(&g, 1000, 500).0 / 100, 270); // 本体の上 → 画面の左
+        let g = Geometry { rotation: Rotation::R90, ..PLAIN };
+        assert_eq!(polar(&g, 1000, 500).0 / 100, 90); // 本体の上 → 画面の右
+    }
+
+    #[test]
     fn parses_commands() {
         assert_eq!(Command::parse(&[0]), Some(Command::Hello));
         assert_eq!(Command::parse(&[1]), Some(Command::Close));
@@ -232,6 +261,9 @@ mod tests {
         assert_eq!(Command::parse(&[0x10, 0x08]), None, "too short");
         assert_eq!(Command::parse(&[]), None);
         assert_eq!(Command::parse(&[0x7F]), None);
+        assert_eq!(Command::parse(&[0x20, 3]), Some(Command::SetRotation(Rotation::R270)));
+        assert_eq!(Command::parse(&[0x20, 4]), None, "only 0..3");
+        assert_eq!(Command::parse(&[0x21]), Some(Command::GetSettings));
     }
 
     #[test]
@@ -240,5 +272,6 @@ mod tests {
         assert_eq!(e.encode(7), [3, 1, 0x28, 0x23, 0x20, 0x03, 0x23, 0x01, 0x56, 0x04, 12, 7]);
         assert_eq!(Event::Opened.encode(0)[0], 1);
         assert_eq!(Event::Closed.encode(0)[0], 2);
+        assert_eq!(Event::Settings { rotation: Rotation::R90 }.encode(5), [4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]);
     }
 }

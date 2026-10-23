@@ -50,7 +50,7 @@ struct ActionRunner {
 
     func run(_ action: RingAction) {
         switch action {
-        case .none, .knob: break
+        case .none, .knob, .openSettings: break // 設定画面は RingController が開く
         case .keys(let combo): send(.key(combo))
         case .media(let key): send(.consumer(key.usage))
         }

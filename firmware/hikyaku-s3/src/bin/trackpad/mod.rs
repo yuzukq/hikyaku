@@ -8,7 +8,7 @@
 //! 動きも途切れがちだったので、実績のある 2MHz にしている。このパッドは SPI のクロックが低い（1MHz 以下）と MSB を取り違える。
 //! レジスタの読み戻しテストで、2MHz・4MHz は 0 エラー、250k〜1MHz は約半分が誤りと確認した（2026-10-13）。
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embassy_time::{Duration, Instant, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
@@ -24,6 +24,7 @@ use esp_hal::{
     time::Rate,
 };
 use hikyaku_pinnacle::{Attenuation, Pinnacle, RelativeOptions};
+use hikyaku_pointer::Rotation;
 use hikyaku_pointer::button::{Action as ButtonAction, Button, Timing as ButtonTiming};
 use hikyaku_pointer::relative::{Config as RelayConfig, Relay, SoftTap, StillFilter};
 use hikyaku_pointer::ring::{self, Event as RingEvent, Geometry};
@@ -46,6 +47,14 @@ pub enum RingCmd {
 pub static RING_CMD: Signal<CriticalSectionRawMutex, RingCmd> = Signal::new();
 /// Mac アプリ（または試験用のクライアント）が接続して HELLO を送ってきたか。false の間は F23 でリングを開かない。
 pub static APP_PRESENT: AtomicBool = AtomicBool::new(false);
+/// 本体の置き方（時計回りに 90° を何回か。`hikyaku_pointer::Rotation`）。起動時にフラッシュから読み（`settings`）、
+/// アプリの命令（ring.ctrl の `20 q`）で変わる。カーソル・スクロール・リングの角度を、置いた向きに合わせて回す。
+pub static ROTATION: AtomicU8 = AtomicU8::new(0);
+
+fn rotation() -> Rotation {
+    Rotation::from_quarters(ROTATION.load(Ordering::Relaxed)).unwrap_or_default()
+}
+
 /// リングを開いている間 true（Esc で閉じるため、`forward_key` が見る）。
 pub static RING_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -183,7 +192,7 @@ const SCROLL_DIV: i32 = 18;
 const SCROLL_INVERT: bool = true;
 
 /// 相対モードの変換の設定（上の定数をまとめたもの。`hikyaku_pointer::relative::Config::FIRMWARE_DEFAULT` と同じ値）。
-fn relay_config() -> RelayConfig {
+fn relay_config(rotation: Rotation) -> RelayConfig {
     RelayConfig {
         swap_xy: SWAP_XY,
         invert_x: SCREEN_X_INVERT,
@@ -191,6 +200,7 @@ fn relay_config() -> RelayConfig {
         gain: REL_GAIN,
         gain_div: REL_GAIN_DIV,
         scroll_div: SCROLL_DIV,
+        rotation,
         scroll_invert: SCROLL_INVERT,
         // 静止中のぶれを抑える（`trackpad-still-filter`）。既定は無効。
         still: cfg!(feature = "trackpad-still-filter").then_some(StillFilter::DEFAULT),
@@ -236,7 +246,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
 
     // 変換（軸の入れ替え・反転・倍率・持ち越し・レポートの分割）は `hikyaku_pointer::relative` にある。
     // ホストで実機ログを再生してテストできる（`cargo test -p hikyaku-pointer`、`examples/replay_rel.rs`）。
-    let mut relay = Relay::new(relay_config());
+    let mut relay = Relay::new(relay_config(rotation()));
 
     // 診断用の集計（1 秒ごと）
     let (mut packets, mut reports, mut errors) = (0u32, 0u32, 0u32);
@@ -257,6 +267,11 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
         max_gap_ms = max_gap_ms.max(last_poll.elapsed().as_millis());
         last_poll = Instant::now();
         let now = Instant::now().as_millis() as u32;
+
+        // 本体の置き方が変わった（アプリの設定画面から）
+        if relay.config().rotation != rotation() {
+            relay = Relay::new(relay_config(rotation()));
+        }
 
         // 本体のボタン
         let action = button.update(now, button_pin.is_low());
@@ -299,7 +314,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
                 last_buttons = 0;
             }
             right_until = None;
-            relay = Relay::new(relay_config());
+            relay = Relay::new(relay_config(rotation()));
             match pad.set_absolute(&mut Delay::new(), true, RING_Z_IDLE) {
                 Ok(()) => {
                     info!("ring: open");
@@ -324,7 +339,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
             match pad.read_absolute() {
                 Ok(Some(a)) => {
                     let touching = a.z > 0;
-                    let (angle_cdeg, radius) = if touching { ring::polar(&RING_GEOMETRY, a.x, a.y) } else { (0, 0) };
+                    let (angle_cdeg, radius) = if touching { ring::polar(&Geometry { rotation: rotation(), ..RING_GEOMETRY }, a.x, a.y) } else { (0, 0) };
                     if touching {
                         *last_touch = now;
                     }

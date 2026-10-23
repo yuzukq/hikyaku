@@ -43,6 +43,8 @@ mod bond_store;
 mod led;
 mod ota;
 #[cfg(feature = "trackpad")]
+mod settings;
+#[cfg(feature = "trackpad")]
 mod trackpad;
 
 const CONNECTIONS_MAX: usize = 1;
@@ -556,6 +558,8 @@ async fn main(spawner: Spawner) -> ! {
     // 保存済みのペア情報を復元する（Mac 側で削除しない限り、再起動後も再ペアリング不要）。
     let flash = RefCell::new(FlashStorage::new(peripherals.FLASH));
     ota::mark_app_valid(&flash);
+    #[cfg(feature = "trackpad")]
+    trackpad::ROTATION.store(settings::load_rotation(&flash).quarters(), core::sync::atomic::Ordering::Relaxed);
     let store = RefCell::new(BondStore::load(&flash));
     for bond in store.borrow().bonds() {
         if let Err(e) = stack.add_bond_information(bond.clone()) {
@@ -600,7 +604,7 @@ async fn main(spawner: Spawner) -> ! {
             // ボンディングを許可（これが無いと PairingComplete の bond が None になり保存されない）。
             let _ = conn.raw().set_bondable(true);
             let _ = conn.raw().request_security();
-            if let SessionEnd::Ota = session(&server, &conn, &store).await {
+            if let SessionEnd::Ota = session(&server, &conn, &store, &flash).await {
                 request_ota_reboot();
             }
             info!("disconnected");
@@ -643,6 +647,7 @@ async fn session<P: PacketPool>(
     server: &Server<'_>,
     conn: &GattConnection<'_, '_, P>,
     store: &RefCell<BondStore<'_, '_>>,
+    #[cfg_attr(not(feature = "trackpad"), allow(unused_variables))] flash: &RefCell<FlashStorage<'_>>,
 ) -> SessionEnd {
     let events = async {
         loop {
@@ -674,7 +679,7 @@ async fn session<P: PacketPool>(
                     #[cfg(feature = "trackpad")]
                     if let GattEvent::Write(w) = &event {
                         if w.handle() == server.ring.ctrl.handle {
-                            w.with_data(|_, d| ring_ctrl(d));
+                            w.with_data(|_, d| ring_ctrl(d, flash));
                         }
                     }
                     match &event {
@@ -736,13 +741,27 @@ async fn session<P: PacketPool>(
 
 /// ring.ctrl への書き込み（1 バイト目が命令。`hikyaku_pointer::ring::ctrl`）。
 #[cfg(feature = "trackpad")]
-fn ring_ctrl(d: &[u8]) {
-    use hikyaku_pointer::ring::Command;
+fn ring_ctrl(d: &[u8], flash: &RefCell<FlashStorage<'_>>) {
+    use core::sync::atomic::Ordering;
+    use hikyaku_pointer::{ring::{Command, Event}, Rotation};
+    // 今の設定をアプリへ返す
+    let send_settings = || {
+        let rotation = Rotation::from_quarters(trackpad::ROTATION.load(Ordering::Relaxed)).unwrap_or_default();
+        let _ = REPORTS.try_send(Report::Ring(Event::Settings { rotation }.encode(0)));
+    };
     match Command::parse(d) {
         Some(Command::Hello) => {
             info!("ring: app connected");
-            trackpad::APP_PRESENT.store(true, core::sync::atomic::Ordering::Relaxed);
+            trackpad::APP_PRESENT.store(true, Ordering::Relaxed);
+            send_settings();
         }
+        Some(Command::SetRotation(r)) => {
+            if trackpad::ROTATION.swap(r.quarters(), Ordering::Relaxed) != r.quarters() {
+                settings::save_rotation(flash, r);
+            }
+            send_settings();
+        }
+        Some(Command::GetSettings) => send_settings(),
         Some(Command::Close) => trackpad::RING_CMD.signal(trackpad::RingCmd::Close),
         Some(Command::Open) => trackpad::RING_CMD.signal(trackpad::RingCmd::Open),
         // アプリの代わりに、本物のキーボード入力として押して離す（アクセシビリティの許可が要らない）

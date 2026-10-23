@@ -34,10 +34,34 @@ public struct RingSample: Equatable, Sendable {
     }
 }
 
+/// hikyaku 本体の置き方。基準の向きから**時計回りに** 90° 単位で回した量（ファーム側: hikyaku_pointer::Rotation）。
+/// キーボードに合わせて本体を回して置くとき、カーソル・スクロール・リングの向きをファームが合わせる。
+public enum DeviceRotation: Int, CaseIterable, Identifiable, Sendable {
+    case r0 = 0
+    case r90 = 1
+    case r180 = 2
+    case r270 = 3
+
+    public var id: Int { rawValue }
+    /// 絵を回す角度（時計回り）
+    public var degrees: Double { Double(rawValue) * 90 }
+
+    public var title: String {
+        switch self {
+        case .r0: "基準"
+        case .r90: "右に 90°"
+        case .r180: "180°"
+        case .r270: "左に 90°"
+        }
+    }
+}
+
 public enum RingEvent: Equatable, Sendable {
     case opened
     case closed
     case position(RingSample)
+    /// 今の設定（HELLO・問い合わせ・変更への返事）
+    case settings(rotation: DeviceRotation)
 
     /// state の 12 バイトを読む。形式が違えば nil。
     public init?(_ data: Data) {
@@ -57,6 +81,9 @@ public enum RingEvent: Equatable, Sendable {
                 z: Int(b[10]),
                 seq: b[11]
             ))
+        case 4:
+            guard let rotation = DeviceRotation(rawValue: Int(b[1])) else { return nil }
+            self = .settings(rotation: rotation)
         default: return nil
         }
     }
@@ -72,6 +99,10 @@ public enum RingCommand: Equatable, Sendable {
     case key(KeyCombo)
     /// メディアキー（Consumer の Usage）を押して離す
     case consumer(UInt16)
+    /// 本体の置き方を変える（hikyaku のフラッシュに保存される）。返事は settings のイベント
+    case setRotation(DeviceRotation)
+    /// 今の設定を問い合わせる。返事は settings のイベント
+    case getSettings
 
     public var bytes: [UInt8] {
         switch self {
@@ -80,6 +111,8 @@ public enum RingCommand: Equatable, Sendable {
         case .open: [0x02]
         case .key(let combo): [0x10, combo.modifiers, combo.usage]
         case .consumer(let usage): [0x11, UInt8(usage & 0xFF), UInt8(usage >> 8)]
+        case .setRotation(let rotation): [0x20, UInt8(rotation.rawValue)]
+        case .getSettings: [0x21]
         }
     }
 }

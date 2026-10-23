@@ -1,7 +1,7 @@
 // Mac 側からリングを開閉する手段（7sPro をつながずに試すとき用。F23 と同じく hikyaku に 02 / 01 を送る）。
 //
 // - ⌃⌥R: 全体のホットキー（Carbon の RegisterEventHotKey。アクセシビリティの許可が要らない）
-// - URL: `open -g hikyaku-ring://open`（close・toggle も）。ターミナルやスクリプトから
+// - URL: `open -g hikyaku-ring://open`（close・toggle も。settings は設定画面）。ターミナルやスクリプトから
 //
 // F23 そのものは使えない: Mac で押したキーは hikyaku には届かない（ファームが F23 を見るのは 7sPro からの USB 入力だけ）うえ、
 // Mac のキーボードには F23 がなく、Carbon にも F20 より上のキーコードがない。
@@ -24,6 +24,7 @@ final class HostTrigger: NSObject, NSApplicationDelegate {
             case "open": controller.openRing()
             case "close": controller.closeRing()
             case "toggle": controller.toggleRing()
+            case "settings": controller.showSettings()
             default: log.error("unknown URL: \(url.absoluteString, privacy: .public)")
             }
         }

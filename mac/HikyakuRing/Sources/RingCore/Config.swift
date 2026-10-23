@@ -48,6 +48,8 @@ public enum RingAction: Codable, Equatable, Hashable, Sendable {
     case keys(KeyCombo)
     case media(MediaKey)
     case knob(KnobKind)
+    /// このアプリの設定画面を開く（項目の割り当て・本体の向きなど）
+    case openSettings
 
     public var isKnob: Bool {
         if case .knob = self { true } else { false }

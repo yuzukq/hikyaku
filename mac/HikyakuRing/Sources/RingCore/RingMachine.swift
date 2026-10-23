@@ -61,6 +61,9 @@ public struct RingMachine: Sendable {
             let wasOpen = mode != .closed
             reset(to: .closed)
             return wasOpen ? [.hide] : []
+        case .settings:
+            // リングの状態とは関係ない（設定画面が使う）
+            return []
         case .position(let s):
             finger = s
             switch mode {
