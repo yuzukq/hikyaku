@@ -124,8 +124,7 @@ public struct RingConfig: Codable, Equatable, Sendable {
         RingItem(name: "Mission Control", symbol: "rectangle.3.group",
                  action: .keys(KeyCombo(modifiers: KeyCombo.control, usage: 0x52))), // ⌃↑
         RingItem(name: "明るさ", symbol: "sun.max", action: .knob(.brightness)),
-        RingItem(name: "Spotlight", symbol: "magnifyingglass",
-                 action: .keys(KeyCombo(modifiers: KeyCombo.command, usage: 0x2C))), // ⌘Space
+        RingItem(name: "設定", symbol: "gearshape", action: .openSettings),
     ])
 }
 
