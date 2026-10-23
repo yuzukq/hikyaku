@@ -95,7 +95,7 @@ rustup target add riscv32imc-unknown-none-elf                          # C3 を�
 ## 開発用 CLI（`tools/hk`）
 
 ```fish
-tools/hk flash          # ビルド → S3 を待って書き込み（BOOT を押しながら挿す）
+tools/hk flash          # ビルド → S3 を待って書き込み（CH9102F の USB を抜いて、S3 を PC に挿す。BOOT は不要）
 tools/hk log            # S3 のログを表示（CH9102F 経由）
 tools/hk flash-log      # 書き込み → 元の構成に戻すのを待って → ログ表示
 FEATURES="trackpad trackpad-trace" tools/hk flash   # 機能を変えてビルド
@@ -105,7 +105,7 @@ FEATURES="trackpad trackpad-trace" tools/hk flash   # 機能を変えてビル�
 キーボード用の USB ホストは動かさない（7skb は使えない）。この版が入っている間は、BOOT を押さなくても `tools/hk flash` で書き込める。
 
 ```fish
-FEATURES="trackpad usb-log trackpad-probe trackpad-selftest" tools/hk flash   # S3 を PC に直結（5V のジャンパーは抜く）
+FEATURES="trackpad usb-log trackpad-probe trackpad-selftest" tools/hk flash   # S3 を PC に直結（CH9102F の USB は抜く）
 tools/hk usb-log 20                                                          # ログを 20 秒読む
 ```
 
@@ -131,7 +131,9 @@ tools/hk usb-log 20                                                          # �
 
 S3 は 3 秒後に USB ホストになり、USB シリアル/JTAG が消える。
 
-1. 5V 給電とキーボードを S3 から外す
+BOOT を使う場合（ファームが壊れて 3 秒の窓がないときなど）:
+
+1. 5V 給電（CH9102F の USB）とキーボードを S3 から外す
 2. S3 の **BOOT を押しながら** USB-C を PC に挿す
 3. `cd firmware/hikyaku-s3 && espflash flash target/xtensa-esp32s3-none-elf/release/hikyaku-s3`
 4. 抜いて、キーボードと給電を元に戻す

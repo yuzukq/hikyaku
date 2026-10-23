@@ -1,3 +1,10 @@
 target/
 .DS_Store
 __pycache__/
+
+# KiCad: per-user view settings, backups, caches, lock files
+*.kicad_prl
+*-backups/
+fp-info-cache
+*.lck
+.history/

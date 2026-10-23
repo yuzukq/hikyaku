@@ -3,9 +3,10 @@
 | 文書 | 内容 |
 |---|---|
 | [hardware/parts.md](hardware/parts.md) | 部品表と手持ちの状況 |
-| [hardware/assembly.md](hardware/assembly.md) | **組み立て（ユニバーサル基板・完成形の配線）** |
-| [hardware/wiring.md](hardware/wiring.md) | 配線（開発中の構成 / 最終形 / S3 ピン割り当て） |
-| [hardware/power.md](hardware/power.md) | 電源（Type-C DIP 化キット・CC 抵抗・モバイルバッテリー） |
+| [hardware/pcb.md](hardware/pcb.md) | **PCB 化（回路図・フットプリント・発注前の確認）** |
+| [hardware/assembly.md](hardware/assembly.md) | 組み立て（ユニバーサル基板・完成形の配線） |
+| [hardware/wiring.md](hardware/wiring.md) | 配線（S3 SuperMini のピン配置・ピン割り当て・書き換え手順） |
+| [hardware/power.md](hardware/power.md) | 電源（CH9102F から給電・モバイルバッテリー。不要になった Type-C DIP 化キットの記録） |
 | [hardware/usb-serial-ch9102f.md](hardware/usb-serial-ch9102f.md) | USB-シリアル変換（ログ用）の使い方 |
 | [hardware/trackpad-tm035035.md](hardware/trackpad-tm035035.md) | トラックパッド TM035035 の仕様メモ |
 | [keyboard-7skb.md](keyboard-7skb.md) | 対象キーボード 7skb の USB/HID 構成 |
