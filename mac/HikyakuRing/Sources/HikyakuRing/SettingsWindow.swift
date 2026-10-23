@@ -13,6 +13,9 @@ final class SettingsWindow {
         window.title = "hikyaku リングの設定"
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
+        // 開くたびに今いるデスクトップ（フルスクリーンのアプリの上も）に出す。
+        // これがないと、最初に開いたデスクトップに張り付いて、別のデスクトップで開いてもそちらに残る
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.center()
     }
 
