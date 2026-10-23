@@ -8,3 +8,10 @@ __pycache__/
 fp-info-cache
 *.lck
 .history/
+_autosave-*
+\#auto_saved_files\#
+*.kicad_sch-bak
+*.kicad_pcb-bak
+*.kicad_sym-bak
+# KiCad: generated outputs (gerbers, drill, BOM, plots). Regenerate with kicad-cli.
+pcb/out/

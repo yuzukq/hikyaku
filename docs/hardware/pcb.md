@@ -78,9 +78,10 @@ FFC ケーブルの種類を変えると、また逆になる可能性がある�
 set K /Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli
 $K sch erc pcb/hikyaku.kicad_sch                 # 回路図のチェック
 $K pcb drc pcb/hikyaku.kicad_pcb                 # 基板のチェック
-$K pcb export gerbers -o out/gerber/ pcb/hikyaku.kicad_pcb
-$K pcb export drill -o out/gerber/ pcb/hikyaku.kicad_pcb
+$K pcb export gerbers -o pcb/out/gerber/ pcb/hikyaku.kicad_pcb
+$K pcb export drill -o pcb/out/gerber/ pcb/hikyaku.kicad_pcb
 ```
 
 - 最初の回路図は、`.kicad_sch` のテキストを直接書いて作り、ERC（0 件）とネットリストを [assembly.md](assembly.md) の配線表と突き合わせて確かめた。
-- `pcb/hikyaku.kicad_prl`（個人の表示設定）はコミットしない。
+- コミットするのは `.kicad_pro`・`.kicad_sch`・`.kicad_pcb`（プロジェクト固有のライブラリを作ったら `sym-lib-table`・`fp-lib-table` と `.pretty` も）。
+  個人の表示設定（`.kicad_prl`）、ロック、自動保存、バックアップ、ローカル履歴（`.history/`）、出力（`pcb/out/`）は `.gitignore` で除外している。
