@@ -15,6 +15,8 @@ struct SettingsView: View {
                 .tabItem { Label("調整", systemImage: "slider.horizontal.3") }
             OrientationSettings(controller: controller)
                 .tabItem { Label("本体の向き", systemImage: "rotate.right") }
+            ProfileSettings(controller: controller)
+                .tabItem { Label("送り先", systemImage: "arrow.left.arrow.right") }
         }
         .frame(width: 620, height: 420)
     }
@@ -310,5 +312,44 @@ struct HikyakuDrawing: View {
             ctx.fill(Path(rect(58.5, 83.5, 10, 2)), with: .color(stem))
         }
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - 送り先
+
+/// 送り先（1 台目 hikyaku / 2 台目 hikyaku2）の切り替えと、送り先ごとのスクロールの向き。どちらも hikyaku に保存される。
+/// 仕様: docs/design/multi-host.md
+private struct ProfileSettings: View {
+    let controller: RingController
+
+    var body: some View {
+        Form {
+            Section("接続") {
+                Text(controller.status.label)
+                if let profile = controller.profile {
+                    LabeledContent("今の送り先", value: profile == 0 ? "1 台目（hikyaku）" : "2 台目（hikyaku2）")
+                }
+            }
+            Section("送り先の切り替え") {
+                HStack {
+                    Button("1 台目（hikyaku）に切り替え") { controller.switchProfile(0) }
+                        .disabled(controller.profile != 1)
+                    Button("2 台目（hikyaku2）に切り替え") { controller.switchProfile(1) }
+                        .disabled(controller.profile != 0)
+                }
+                Text("hikyaku は送り先ごとに別の機器として、1 台ずつつながります。切り替えると hikyaku は再起動して、もう一方の送り先につなぎ直します（数秒かかり、この Mac との接続は切れます）。キーボードの F21 / F22、または本体のボタンをパッドに触れずに 3 秒押し続けても切り替えられます。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Section("スクロール") {
+                Toggle("この送り先でスクロールを反転する（Mac のナチュラルスクロールと同じ向き）", isOn: Binding(
+                    get: { controller.scrollInvert ?? false },
+                    set: { controller.setScrollInvert($0) }
+                ))
+                .disabled(controller.scrollInvert == nil)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { controller.requestSettings() }
     }
 }

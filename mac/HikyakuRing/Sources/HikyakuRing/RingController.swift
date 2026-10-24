@@ -27,6 +27,9 @@ final class RingController {
     private(set) var knobReadout: KnobReadout?
     /// hikyaku 本体の置き方（hikyaku から届いた値）。つながっていない・ファームが古くて返事がないなら nil
     private(set) var rotation: DeviceRotation?
+    /// 今の送り先（0 = 1 台目 hikyaku、1 = 2 台目 hikyaku2）と、その送り先でスクロールを反転しているか（hikyaku から届いた値）
+    private(set) var profile: Int?
+    private(set) var scrollInvert: Bool?
 
     @ObservationIgnored private var machine: RingMachine
     @ObservationIgnored private let link = RingLink()
@@ -41,7 +44,11 @@ final class RingController {
         machine = RingMachine(tuning: config.tuning, actions: config.items.map(\.action))
         link.onStatus = { [weak self] status in
             self?.status = status
-            if !status.isReady { self?.rotation = nil }
+            if !status.isReady {
+                self?.rotation = nil
+                self?.profile = nil
+                self?.scrollInvert = nil
+            }
         }
         link.onEvent = { [weak self] in self?.handle($0) }
         link.start()
@@ -69,15 +76,27 @@ final class RingController {
         link.send(.setRotation(rotation))
     }
 
+    /// 今の送り先でスクロールを反転するか（hikyaku が保存して、settings のイベントで返す）。
+    func setScrollInvert(_ on: Bool) {
+        link.send(.setScrollInvert(on))
+    }
+
+    /// 送り先を切り替える。hikyaku は再起動して、もう一方の ID でつなぎ直す（この Mac との接続は切れる）。
+    func switchProfile(_ profile: Int) {
+        link.send(.switchProfile(profile))
+    }
+
     /// 今の設定を問い合わせる（HELLO の返事を取りこぼしたときや、設定画面を開いたとき）。
     func requestSettings() {
         link.send(.getSettings)
     }
 
     private func handle(_ event: RingEvent) {
-        if case .settings(let rotation) = event {
-            log.info("settings: rotation \(rotation.rawValue * 90)°")
+        if case .settings(let rotation, let profile, let scrollInvert) = event {
+            log.info("settings: rotation \(rotation.rawValue * 90)°, profile \(profile + 1), scroll invert \(scrollInvert)")
             self.rotation = rotation
+            self.profile = profile
+            self.scrollInvert = scrollInvert
             return
         }
         let effects = machine.handle(event, at: ProcessInfo.processInfo.systemUptime)

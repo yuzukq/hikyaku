@@ -21,6 +21,7 @@ internal sealed class Tray : IDisposable
         _toggle = new Forms.ToolStripMenuItem("リングを開く / 閉じる（Ctrl+Alt+R）", null, (_, _) => controller.ToggleRing());
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add(_status);
+        menu.Items.Add(new Forms.ToolStripMenuItem($"版 {Log.Version}") { Enabled = false });
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(_toggle);
         menu.Items.Add(new Forms.ToolStripMenuItem("設定…", null, (_, _) => controller.ShowSettings()));

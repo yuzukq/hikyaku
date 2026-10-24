@@ -7,6 +7,11 @@ namespace Hikyaku.Ring;
 
 public static class Log
 {
+    /// <summary>アプリの版（ビルドのときに git のコミットを埋め込む: 0.1.0+abc1234）。</summary>
+    public static readonly string Version =
+        typeof(Log).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            is [System.Reflection.AssemblyInformationalVersionAttribute a, ..] ? a.InformationalVersion : "?";
+
     private static readonly object Gate = new();
     public static readonly string PathName = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HikyakuRing", "log.txt");

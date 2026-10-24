@@ -15,6 +15,10 @@ Ctrl+Alt+R でリングを出す。仕様は [docs/design/ring.md](../docs/desig
 GitHub の **Releases → windows-latest → hikyaku-windows.zip**（`win/` を変えて main に push すると、GitHub Actions が Windows でビルドして置き直す。
 `.github/workflows/windows.yml`。Actions の画面から手動でも動かせる）。
 
+**入れ方・入れ替え方**: zip を展開して **install.cmd** をダブルクリック。動いている HikyakuRing を終了させ、`%LOCALAPPDATA%\Programs\HikyakuRing` に
+上書きで入れて起動する（古い版と重複しない）。スタートメニューにショートカットを作り、「Windows の起動時に開始」が有効ならその登録も新しい場所に向け直す。
+今の版は、トレイのメニューと設定画面の「送り先」タブに出る（`0.1.0+コミット`）。
+
 ## ビルド
 
 ```sh

@@ -1,0 +1,52 @@
+# Mac アプリ（mac/HikyakuRing）をビルドして、Release「mac-latest」に HikyakuRing-mac.zip を置く。
+# main の mac/ が変わったとき、または Actions の画面から手動で（workflow_dispatch）。
+# Actions には持ち主の証明書がないのでアドホック署名になる（入れ替えのたびに Bluetooth の許可を聞き直されることがある）。
+# 普段使いは Mac で `mac/HikyakuRing/build.sh --install`。この zip は、コンパイルとテストの確認と、予備の配布用。
+# 入れ方: mac/HikyakuRing/install.sh ~/Downloads/HikyakuRing-mac.zip
+name: Mac app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mac/**"
+      - ".github/workflows/mac.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mac-app
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        working-directory: mac/HikyakuRing
+        run: swift test
+
+      - name: Build
+        working-directory: mac/HikyakuRing
+        run: |
+          ./build.sh
+          ditto -c -k --keepParent build/HikyakuRing.app build/HikyakuRing-mac.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hikyaku-mac
+          path: mac/HikyakuRing/build/HikyakuRing-mac.zip
+
+      # 毎回同じ名前の Release を作り直す（いつも最新のものが同じ場所にある）
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete mac-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create mac-latest mac/HikyakuRing/build/HikyakuRing-mac.zip --prerelease \
+            --title "Mac アプリ（最新）" --target ${{ github.sha }} \
+            --notes "main の ${{ github.sha }} からビルドした Mac アプリ（自動。アドホック署名）。入れ方: mac/HikyakuRing/install.sh ~/Downloads/HikyakuRing-mac.zip（普段使いは Mac で build.sh --install）"

@@ -33,7 +33,7 @@ public partial class SettingsWindow : Window
         BuildTuning();
         BuildRotation();
         AutostartBox.IsChecked = Autostart.Enabled;
-        LogText.Text = $"ログ: {Log.PathName}";
+        LogText.Text = $"版 {Log.Version}　ログ: {Log.PathName}";
         RefreshItems();
         ItemList.SelectedIndex = 0;
         controller.Changed += () => Dispatcher.BeginInvoke(RefreshDevice);

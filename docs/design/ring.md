@@ -116,7 +116,8 @@ Mac アプリでは、設定画面の「本体の向き」タブで本体の絵�
 実装: `mac/HikyakuRing`（SwiftPM。Xcode のプロジェクトは使わない）。
 
 ```sh
-mac/HikyakuRing/build.sh --open   # build/HikyakuRing.app を作って起動する（メニューバーに常駐）
+mac/HikyakuRing/build.sh --install  # 作って /Applications に入れて起動する（古い版は置き換え。普段使いはこれ）
+mac/HikyakuRing/build.sh --open   # build/HikyakuRing.app を作って、その場で起動する（試すとき）
 cd mac/HikyakuRing && swift test  # 通信の形式・選択・ノブの計算のテスト
 ```
 
@@ -130,6 +131,10 @@ cd mac/HikyakuRing && swift test  # 通信の形式・選択・ノブの計算�
   （ファームが F23 を見るのは 7sPro からの USB 入力だけ。Mac → hikyaku の HID は LED の出力レポートしかない）。
 - ログ: `log stream --predicate 'subsystem == "dev.hikyaku.ring"' --info`
 - 設定: `~/Library/Application Support/HikyakuRing/config.json`（なければ標準の 8 項目）。
+- 版: メニューに `版 コミット` と出る（build.sh が Info.plist の CFBundleVersion に入れる）。
+- GitHub Actions（`.github/workflows/mac.yml`）でも、`mac/` を変えて push するとテストとビルドをして、Releases の **mac-latest** に zip を置く。
+  ただしアドホック署名なので、入れ替えのたびに Bluetooth の許可を聞き直されることがある。入れるときは `mac/HikyakuRing/install.sh ~/Downloads/HikyakuRing-mac.zip`。
+- 設定画面の「送り先」タブで、1 台目 / 2 台目の切り替えと、送り先ごとのスクロールの向きを変えられる（Windows アプリと同じ）。
 - キーの記録: ⌘Space のように Mac が先に取るキーは記録できないので、キーだけ記録して修飾キーのボタンで足す。
 
 以下は作るときの仕様（実装はこれに沿っている）。

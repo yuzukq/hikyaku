@@ -24,6 +24,8 @@ private struct MenuContent: View {
 
     var body: some View {
         Text(controller.status.label)
+        // 版（build.sh が Info.plist の CFBundleVersion に git のコミットを入れる）
+        Text("版 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")")
         Divider()
         if controller.mode == .closed {
             Button("リングを開く") { controller.openRing() }

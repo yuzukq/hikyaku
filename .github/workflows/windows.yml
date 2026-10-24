@@ -35,12 +35,14 @@ jobs:
       - name: Publish
         working-directory: win
         run: |
+          $rev = git rev-parse --short HEAD
           $args = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true',
                     '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:EnableCompressionInSingleFile=true',
-                    '-p:DebugType=none', '--nologo', '-o', 'out')
+                    '-p:DebugType=none', "-p:SourceRevisionId=$rev", '--nologo', '-o', 'out')
           dotnet publish HikyakuRing @args
           dotnet publish RingProbe @args
-          Compress-Archive -Path out/HikyakuRing.exe, out/RingProbe.exe -DestinationPath out/hikyaku-windows.zip
+          Copy-Item install.ps1, install.cmd out/
+          Compress-Archive -Path out/HikyakuRing.exe, out/RingProbe.exe, out/install.cmd, out/install.ps1 -DestinationPath out/hikyaku-windows.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -53,5 +55,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete windows-latest --yes --cleanup-tag 2>$null
-          $notes = "main の ${{ github.sha }} からビルドした Windows アプリ（自動）。`n`nHikyakuRing.exe = アプリ本体、RingProbe.exe = 独自サービスを開けるかの確認用。使い方は win/README.md。"
+          $notes = "main の ${{ github.sha }} からビルドした Windows アプリ（自動）。`n`n展開して install.cmd をダブルクリックすると、%LOCALAPPDATA%\\Programs\\HikyakuRing に入れる（古い版は置き換え）。使い方は win/README.md。"
           gh release create windows-latest win/out/hikyaku-windows.zip --prerelease --title "Windows アプリ（最新）" --notes $notes --target ${{ github.sha }}

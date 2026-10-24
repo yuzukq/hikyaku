@@ -23,7 +23,7 @@ public partial class App : Application
             Shutdown();
             return;
         }
-        Log.Info($"start {typeof(App).Assembly.GetName().Version}");
+        Log.Info($"start {Log.Version}");
         DispatcherUnhandledException += (_, args) =>
         {
             Log.Error($"unhandled: {args.Exception}");
