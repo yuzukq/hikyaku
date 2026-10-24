@@ -76,6 +76,10 @@ Windows 側で分かったこと（Windows 11 26200、アダプタは BARROT Blu
    **Windows で hikyaku2 を一度削除してから**ペアリングし直す（古い、0x1801 だけの情報を捨てるため）。
    hikyaku のログに `service changed: subscribed=true` → `asking the host to discover the services again` が出て、
    そのあと `gatt read handle=...`（Windows がレポートマップなどを読む）が続けば成功
+   **結果（b00c509、21:54）: 直らなかった。** Windows は購読して indication に Confirmation を返すが、その後も 0x1801 の処理
+   （Find By Type Value → Read By Type → Find Information → CCCD の書き込み）を繰り返すだけで、Read By Group Type を一度も出さない。
+   hikyaku の応答はすべて規格どおり（ETW と hikyaku の ATT のログが 1 対 1 で一致）。Windows が 0x1801 の子を作ったのは
+   indication より前で、そのとき Windows が知っていたのは 0x1801 だけ。Service Changed は規格どおりで害はないので、そのまま残す
 2. 1 で直らなければ、アダプタの問題を疑う。接続の直後に Windows が出した LE Read Remote Features を、アダプタが
    Controller Busy（0x3A）で断っている（アダプタが自分で Data Length の更新を始めたのとぶつかった）。別の Bluetooth アダプタ
    （Intel・Realtek など）で試すか、ほかの BLE 機器（BlueZ の周辺機器など）が同じアダプタで動くかを確かめる
