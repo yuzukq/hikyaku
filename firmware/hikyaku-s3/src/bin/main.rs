@@ -782,6 +782,8 @@ async fn advertise<'v, 's, C: Controller>(
         &[
             AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
             AdStructure::CompleteServiceUuids16(&[[0x12, 0x18]]),
+            // 外見 = キーボード（0x03C1）。Windows 11 の標準の検出は、何の機器か分からないものを「デバイスの追加」の一覧に出さない
+            AdStructure::Unknown { ty: 0x19, data: &[0xC1, 0x03] },
             AdStructure::CompleteLocalName(name.as_bytes()),
         ],
         &mut adv[..],
