@@ -588,8 +588,8 @@ impl<'stack, P: PacketPool> Connection<'stack, P> {
         self.manager.peer_address(self.index)
     }
 
-    /// hikyaku: 後回しにした ATT MTU 交換の応答（2 回目以降の要求への応答）を、相手から `idle` の間 ATT が来ていなければ
-    /// （または後回しにしてから `max_wait` たったら）送る。送ったら true。接続中に定期的に（100 ms ごとくらいに）呼ぶ。
+    /// hikyaku: 後回しにした 2 回目以降の ATT MTU 交換の要求への応答（エラー応答 Request Not Supported）を、相手から `idle` の間
+    /// ATT が来ていなければ（または後回しにしてから `max_wait` たったら）送る。送ったら true。接続中に定期的に（100 ms ごとくらいに）呼ぶ。
     pub fn send_deferred_mtu_response(&self, idle: embassy_time::Duration, max_wait: embassy_time::Duration) -> bool {
         self.manager.send_deferred_mtu_response(self.index, idle, max_wait)
     }

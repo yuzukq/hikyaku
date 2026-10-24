@@ -796,7 +796,7 @@ impl<'d, P: PacketPool> ConnectionManager<'d, P> {
         }
     }
 
-    /// hikyaku: 後回しにした MTU の応答を送る（`Connection::send_deferred_mtu_response`）。
+    /// hikyaku: 後回しにした 2 回目以降の MTU 交換の要求に、エラー応答を送る（`Connection::send_deferred_mtu_response`）。
     pub(crate) fn send_deferred_mtu_response(
         &self,
         index: u8,
@@ -816,18 +816,26 @@ impl<'d, P: PacketPool> ConnectionManager<'d, P> {
                 channel: crate::types::l2cap::L2CAP_CID_ATT,
                 length: 3,
             })
-            .and_then(|_| w.write(crate::att::Att::Server(crate::att::AttServer::Response(crate::att::AttRsp::ExchangeMtu { mtu }))));
+            .and_then(|_| {
+                // MTU の応答ではなくエラー応答（Request Not Supported）。Windows は MTU が決まった後の MTU の応答を捨てるので、
+                // それでは 2 回目の要求が終わらず 30 秒で切断した。エラー応答なら、その要求は終わりとして扱われる（2026-10-24）。
+                w.write(crate::att::Att::Server(crate::att::AttServer::Response(crate::att::AttRsp::Error {
+                    request: crate::att::ATT_EXCHANGE_MTU_REQ,
+                    handle: 0,
+                    code: crate::att::AttErrorCode::REQUEST_NOT_SUPPORTED,
+                })))
+            });
         if written.is_err() {
             return false;
         }
         let len = w.len();
         match self.try_outbound(handle, Pdu::new(buf, len)) {
             Ok(()) => {
-                info!("[host] sent the deferred ATT MTU response ({})", mtu);
+                info!("[host] sent an error response to the repeated ATT MTU request (MTU stays {})", mtu);
                 true
             }
             Err(e) => {
-                warn!("[host] sending the deferred ATT MTU response failed: {:?}", e);
+                warn!("[host] sending the error response to the repeated ATT MTU request failed: {:?}", e);
                 false
             }
         }
