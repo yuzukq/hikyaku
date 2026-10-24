@@ -87,6 +87,13 @@ Windows 側で分かったこと（Windows 11 26200、アダプタは BARROT Blu
    アダプタの問題を疑う。接続の直後に Windows が出した LE Read Remote Features を、アダプタが
    Controller Busy（0x3A）で断っている（アダプタが自分で Data Length の更新を始めたのとぶつかった）。別の Bluetooth アダプタ
    （Intel・Realtek など）で試すか、ほかの BLE 機器（BlueZ の周辺機器など）が同じアダプタで動くかを確かめる
+3. **TP-Link のアダプタ（USB 2357:0604、Realtek 系、ドライバ 1.9.1051.3012）に替えると、ペアリングの途中で切れた。** Windows が
+   ATT の Exchange MTU Request を同じ ms に 2 回送り、hikyaku が 2 回とも応答すると、2 回目の応答の直後に Windows が切断（0x13）する。
+   trouble-host をリポジトリに置き（`firmware/hikyaku-s3/vendor`）、MTU の交換には 1 接続で最初の 1 回だけ応答するようにした（3e3b08f）
+4. **動いた（22:32）。** 3e3b08f と TP-Link のアダプタで、キー・カーソルが動く。Windows は暗号化の後に Read By Group Type で全体を
+   発見し、GAP・GATT・HID（キーボード・マウス・コンシューマ）・電池・OTA・リング・DIS の子を作った。WinRT の
+   `BluetoothLEDevice.FromBluetoothAddressAsync` も開け、`GetGattServicesAsync` で 7 つのサービス（リングはハンドル 44）が見える。
+   MTU の要求はこのときも 2 回来ている（2 回目は hikyaku が捨てる）。BARROT のアダプタは使わない
 
 ## Windows アプリの技術選定: C# (.NET 8) + WPF
 
