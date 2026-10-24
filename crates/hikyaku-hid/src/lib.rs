@@ -63,6 +63,9 @@ pub fn usage_name(code: u8) -> &'static str {
 pub const KEY_F24: u8 = 0x73;
 /// F23（0x72）。hikyaku はこのキーを Mac に送らず、押すたびにショートカットリングを開閉する。
 pub const KEY_F23: u8 = 0x72;
+/// F21 / F22（0x70 / 0x71）: 送り先（プロファイル）の 1 台目 / 2 台目に切り替える（docs/design/multi-host.md）。ホストには送らない。
+pub const KEY_F21: u8 = 0x70;
+pub const KEY_F22: u8 = 0x71;
 /// Esc（0x29）。リング中だけ、リングを閉じるのに使う。
 pub const KEY_ESC: u8 = 0x29;
 

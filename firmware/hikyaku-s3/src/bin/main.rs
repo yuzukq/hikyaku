@@ -21,7 +21,7 @@ use esp_storage::FlashStorage;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::usb::otg::{embassy_usb_host::Driver as HostDriver, Usb};
 
-use embassy_futures::select::{select, select3, Either, Either3};
+use embassy_futures::select::{select, select3, select4, Either, Either3, Either4};
 use embassy_usb_driver::host::{pipe, DeviceEvent, UsbHostAllocator, UsbHostController, UsbPipe};
 use embassy_usb_driver::Speed;
 use embassy_usb_driver::{EndpointInfo, EndpointType};
@@ -43,14 +43,18 @@ extern crate alloc;
 mod bond_store;
 mod led;
 mod ota;
-#[cfg(feature = "trackpad")]
 mod settings;
 #[cfg(feature = "trackpad")]
 mod trackpad;
 
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 3;
-const NAME: &str = "hikyaku";
+/// 送り先（プロファイル）ごとの名前と BLE アドレス（docs/design/multi-host.md）。送り先ごとに別の機器として見えるので、
+/// Mac は hikyaku、Windows は hikyaku2 だけを覚え、別の送り先で待っている間につなぎに来ない。
+/// 1 台目は 2026-10 までと同じアドレス（Mac の再ペアリングが要らない）。ランダムの静的アドレスなので、最上位バイトの上 2 ビットは 1。
+const PROFILE_NAMES: [&str; settings::PROFILES as usize] = ["hikyaku", "hikyaku2"];
+const PROFILE_ADDRESSES: [[u8; 6]; settings::PROFILES as usize] =
+    [[0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff], [0xfe, 0x8f, 0x1a, 0x05, 0xe4, 0xff]];
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -102,6 +106,46 @@ const OTA_BOOT_MAGIC: u32 = 0x4F54_4131;
 static mut OTA_BOOT_FLAG: u32 = 0;
 
 /// OTA モードで再起動する。
+/// 送り先（プロファイル）を切り替える要求（F21 / F22・本体のボタンの長押し・アプリの命令）。値は切り替え先。
+static PROFILE_SWITCH: Signal<CriticalSectionRawMutex, u8> = Signal::new();
+
+/// 送り先を切り替えるための再起動のフラグ（RTC メモリ）。立っていたら、USB の書き換え猶予（3 秒）を飛ばし、LED で送り先を示す。
+const SWITCH_BOOT_MAGIC: u32 = 0x5357_4348;
+#[esp_hal::ram(unstable(rtc_fast, persistent))]
+static mut SWITCH_BOOT_FLAG: u32 = 0;
+
+/// 送り先を保存して再起動する。起動し直すと、その送り先のアドレス・名前・ペア情報でつなぐ。
+fn switch_profile_and_reboot(flash: &RefCell<FlashStorage<'_>>, profile: u8) -> ! {
+    info!("profile: switching to {} ({})", profile + 1, PROFILE_NAMES[profile as usize]);
+    settings::update(flash, |s| s.profile = profile);
+    unsafe { core::ptr::addr_of_mut!(SWITCH_BOOT_FLAG).write_volatile(SWITCH_BOOT_MAGIC) };
+    esp_hal::system::software_reset()
+}
+
+/// 起動時に呼ぶ。送り先の切り替えでの再起動なら true（フラグはここで消す）。
+fn take_switch_boot_flag() -> bool {
+    let flag = unsafe { core::ptr::addr_of_mut!(SWITCH_BOOT_FLAG) };
+    let on = unsafe { flag.read_volatile() } == SWITCH_BOOT_MAGIC;
+    unsafe { flag.write_volatile(0) };
+    on
+}
+
+/// 起動時に、今の送り先の番号の回数だけ LED を青く点滅させる（トラックパッドの準備ができてから）。
+#[embassy_executor::task]
+async fn show_profile(profile: u8) {
+    Timer::after(Duration::from_millis(1500)).await;
+    for _ in 0..=profile {
+        led::flash(led::BLUE, 250).await;
+        Timer::after(Duration::from_millis(200)).await;
+    }
+}
+
+/// 本体のボタンの長押し: もう一方の送り先へ切り替える。
+#[cfg_attr(not(feature = "trackpad"), allow(dead_code))]
+fn request_profile_toggle() {
+    PROFILE_SWITCH.signal((settings::get().profile + 1) % settings::PROFILES);
+}
+
 fn request_ota_reboot() -> ! {
     info!("ota: rebooting into OTA mode");
     unsafe { core::ptr::addr_of_mut!(OTA_BOOT_FLAG).write_volatile(OTA_BOOT_MAGIC) };
@@ -225,6 +269,12 @@ fn media_report(buf: &[u8]) -> Option<Report> {
 /// 7sPro では、親指キーの長押し（QMK のモッドタップ）に F24 を割り当てている。
 #[allow(unused_mut)]
 fn forward_key(mut r: [u8; 8]) {
+    // F21 / F22: 送り先を 1 台目 / 2 台目に切り替える（ホストには送らない）。今の送り先なら何もしない
+    for (key, profile) in [(hikyaku_hid::KEY_F21, 0u8), (hikyaku_hid::KEY_F22, 1u8)] {
+        if hikyaku_hid::take_key(&mut r, key) && settings::get().profile != profile {
+            PROFILE_SWITCH.signal(profile);
+        }
+    }
     #[cfg(feature = "trackpad")]
     {
         use core::sync::atomic::{AtomicBool, Ordering};
@@ -299,11 +349,14 @@ const USB_REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
 /// USB ホスト：つながったキーボード（ブートプロトコル）を読んで REPORTS に流す。
 #[cfg_attr(feature = "usb-log", allow(dead_code))]
 #[embassy_executor::task]
-async fn usb_host(usb: Usb<'static>) {
+async fn usb_host(usb: Usb<'static>, fast_start: bool) {
     static BUS_STATE: BusState = BusState::new();
     // ホストにすると USB シリアル/JTAG（書き込み用）が使えなくなる。
     // 起動後しばらくは猶予を置き、その間なら espflash で書き換えられるようにする。
-    Timer::after(Duration::from_secs(3)).await;
+    // 送り先の切り替えでの再起動なら、待たない（書き換えるときは電源を入れ直すので、猶予はそこで取れる）。
+    if !fast_start {
+        Timer::after(Duration::from_secs(3)).await;
+    }
     let (mut ctrl, handle) = bus(HostDriver::new(usb), &BUS_STATE);
     let mut cfg = [0u8; 256];
     // 認識・登録に失敗したとき、挿し直しを待たずにバスリセットでやり直す。retry = やり直すときの速度と回数
@@ -436,6 +489,18 @@ struct Server {
     ota: OtaService,
     /// ショートカットリング（docs/design/ring.md）。OTA の後ろに足して、既存サービスのハンドルを動かさない。
     ring: RingService,
+    /// Device Information（PnP ID）。HID over GATT の仕様で必須で、Windows はこれが無いとつながらないことがある。
+    /// 末尾に足して、既存サービスのハンドルを動かさない（Mac の再ペアリングが要らない）。
+    device_info: DeviceInfoService,
+}
+
+/// PnP ID: ベンダー ID の出所 = Bluetooth SIG（0x01）、会社 = Espressif（0x02E5）、製品 0x0001、版 0x0100。
+#[gatt_service(uuid = "180a")]
+struct DeviceInfoService {
+    #[characteristic(uuid = "2a29", read, value = [b'h', b'i', b'k', b'y', b'a', b'k', b'u'])]
+    manufacturer: [u8; 7],
+    #[characteristic(uuid = "2a50", read, value = [0x01, 0xE5, 0x02, 0x01, 0x00, 0x00, 0x01])]
+    pnp_id: [u8; 7],
 }
 
 /// ショートカットリング。state: hikyaku → アプリ（開いた・閉じた・指の位置。12 バイト）、ctrl: アプリ → hikyaku（HELLO・CLOSE・OPEN）。
@@ -500,6 +565,19 @@ async fn main(spawner: Spawner) -> ! {
 
     // オンボードの RGB LED（GPIO48）。トラックパッドの準備ができるまで赤（触らない）、できたら緑、パッドが見つからなければ青。
     led::init(peripherals.RMT, peripherals.GPIO48);
+
+    // 設定（置き方・送り先・スクロールの向き）を最初に読む。送り先で BLE のアドレスと名前が決まる。
+    let flash = RefCell::new(FlashStorage::new(peripherals.FLASH));
+    ota::mark_app_valid(&flash);
+    let config = settings::load(&flash);
+    let switched = take_switch_boot_flag();
+    #[cfg(feature = "trackpad")]
+    {
+        use core::sync::atomic::Ordering;
+        trackpad::ROTATION.store(config.rotation, Ordering::Relaxed);
+        trackpad::SCROLL_INVERT.store(config.scroll_invert_now(), Ordering::Relaxed);
+    }
+    let name = PROFILE_NAMES[config.profile as usize];
     #[cfg(feature = "trackpad")]
     led::set(led::RED);
 
@@ -605,7 +683,7 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(not(feature = "usb-log"))]
     {
         let usb = Usb::new_fs(peripherals.USB_FS, peripherals.GPIO20, peripherals.GPIO19);
-        spawner.spawn(usb_host(usb).unwrap());
+        spawner.spawn(usb_host(usb, switched).unwrap());
     }
     #[cfg(feature = "usb-log")]
     info!("usb-log: logging over the S3 USB-C; USB host (keyboard) is disabled");
@@ -621,17 +699,15 @@ async fn main(spawner: Spawner) -> ! {
     let mut resources: HostResources<_, DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
         HostResources::new();
 
-    let address = Address::random([0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff]);
+    let address = Address::random(PROFILE_ADDRESSES[config.profile as usize]);
+    info!("profile {}: advertising as {}", config.profile + 1, name);
+    spawner.spawn(show_profile(config.profile).unwrap());
     let stack = trouble_host::new(controller, &mut resources)
         .set_random_address(address)
         .set_io_capabilities(IoCapabilities::NoInputNoOutput)
         .build();
-    // 保存済みのペア情報を復元する（Mac 側で削除しない限り、再起動後も再ペアリング不要）。
-    let flash = RefCell::new(FlashStorage::new(peripherals.FLASH));
-    ota::mark_app_valid(&flash);
-    #[cfg(feature = "trackpad")]
-    trackpad::ROTATION.store(settings::load_rotation(&flash).quarters(), core::sync::atomic::Ordering::Relaxed);
-    let store = RefCell::new(BondStore::load(&flash));
+    // 今の送り先の、保存済みのペア情報を復元する（ホスト側で削除しない限り、再起動後も再ペアリング不要）。
+    let store = RefCell::new(BondStore::load(&flash, config.profile));
     for bond in store.borrow().bonds() {
         if let Err(e) = stack.add_bond_information(bond.clone()) {
             warn!("restore bond failed: {:?}", e);
@@ -641,7 +717,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut runner = stack.runner();
 
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-        name: NAME,
+        name,
         appearance: &appearance::human_interface_device::KEYBOARD,
     }))
     .unwrap();
@@ -662,21 +738,37 @@ async fn main(spawner: Spawner) -> ! {
             ota_mode(&mut peripheral, &server, &flash).await;
         }
         loop {
-            let conn = match select(advertise(&mut peripheral, &server, NAME, &Default::default()), OTA_REQUEST.wait()).await {
-                Either::First(Ok(conn)) => conn,
-                Either::First(Err(e)) => {
+            let conn = match select3(
+                advertise(&mut peripheral, &server, name, &Default::default()),
+                OTA_REQUEST.wait(),
+                PROFILE_SWITCH.wait(),
+            )
+            .await
+            {
+                Either3::First(Ok(conn)) => conn,
+                Either3::First(Err(e)) => {
                     warn!("advertise error: {:?}", e);
                     Timer::after(Duration::from_secs(1)).await;
                     continue;
                 }
-                Either::Second(()) => request_ota_reboot(),
+                Either3::Second(()) => request_ota_reboot(),
+                Either3::Third(p) => switch_profile_and_reboot(&flash, p),
             };
             info!("connected");
             // ボンディングを許可（これが無いと PairingComplete の bond が None になり保存されない）。
             let _ = conn.raw().set_bondable(true);
             let _ = conn.raw().request_security();
-            if let SessionEnd::Ota = session(&server, &conn, &store, &flash).await {
-                request_ota_reboot();
+            match session(&server, &conn, &store, &flash).await {
+                SessionEnd::Ota => request_ota_reboot(),
+                SessionEnd::Switch(p) => {
+                    // ホストに押しっぱなしを残さないよう、切る前に全解放を送ってから切り替える
+                    let _ = server.hid.keyboard_in.notify(&conn, &[0; 8], false).await;
+                    let _ = server.hid.mouse_in.notify(&conn, &[0; 5], false).await;
+                    conn.raw().disconnect();
+                    Timer::after(Duration::from_millis(100)).await;
+                    switch_profile_and_reboot(&flash, p)
+                }
+                SessionEnd::Disconnected => {}
             }
             info!("disconnected");
         }
@@ -797,8 +889,9 @@ async fn session<P: PacketPool>(
             }
         }
     };
-    let end = match select3(events, forward, OTA_REQUEST.wait()).await {
-        Either3::Third(()) => SessionEnd::Ota,
+    let end = match select4(events, forward, OTA_REQUEST.wait(), PROFILE_SWITCH.wait()).await {
+        Either4::Third(()) => SessionEnd::Ota,
+        Either4::Fourth(p) => SessionEnd::Switch(p),
         _ => SessionEnd::Disconnected,
     };
     // 切断したら、アプリはいない。リングも閉じる。
@@ -817,8 +910,10 @@ fn ring_ctrl(d: &[u8], flash: &RefCell<FlashStorage<'_>>) {
     use hikyaku_pointer::{ring::{Command, Event}, Rotation};
     // 今の設定をアプリへ返す
     let send_settings = || {
-        let rotation = Rotation::from_quarters(trackpad::ROTATION.load(Ordering::Relaxed)).unwrap_or_default();
-        let _ = REPORTS.try_send(Report::Ring(Event::Settings { rotation }.encode(0)));
+        let s = settings::get();
+        let rotation = Rotation::from_quarters(s.rotation).unwrap_or_default();
+        let event = Event::Settings { rotation, profile: s.profile, scroll_invert: s.scroll_invert_now() };
+        let _ = REPORTS.try_send(Report::Ring(event.encode(0)));
     };
     match Command::parse(d) {
         Some(Command::Hello) => {
@@ -827,10 +922,22 @@ fn ring_ctrl(d: &[u8], flash: &RefCell<FlashStorage<'_>>) {
             send_settings();
         }
         Some(Command::SetRotation(r)) => {
-            if trackpad::ROTATION.swap(r.quarters(), Ordering::Relaxed) != r.quarters() {
-                settings::save_rotation(flash, r);
-            }
+            settings::update(flash, |s| s.rotation = r.quarters());
+            trackpad::ROTATION.store(r.quarters(), Ordering::Relaxed);
             send_settings();
+        }
+        Some(Command::SetScrollInvert(on)) => {
+            let s = settings::update(flash, |s| {
+                let bit = 1 << s.profile;
+                s.scroll_invert = if on { s.scroll_invert | bit } else { s.scroll_invert & !bit };
+            });
+            trackpad::SCROLL_INVERT.store(s.scroll_invert_now(), Ordering::Relaxed);
+            send_settings();
+        }
+        Some(Command::SwitchProfile(p)) => {
+            if p != settings::get().profile {
+                PROFILE_SWITCH.signal(p);
+            }
         }
         Some(Command::GetSettings) => send_settings(),
         Some(Command::Close) => trackpad::RING_CMD.signal(trackpad::RingCmd::Close),
@@ -852,6 +959,8 @@ enum SessionEnd {
     Disconnected,
     /// キーボードから OTA モードが要求された。
     Ota,
+    /// 送り先の切り替えが要求された（値は切り替え先）。
+    Switch(u8),
 }
 
 enum Action {
