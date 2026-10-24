@@ -130,16 +130,6 @@ fn take_switch_boot_flag() -> bool {
     on
 }
 
-/// 起動時に、今の送り先の番号の回数だけ LED を青く点滅させる（トラックパッドの準備ができてから）。
-#[embassy_executor::task]
-async fn show_profile(profile: u8) {
-    Timer::after(Duration::from_millis(1500)).await;
-    for _ in 0..=profile {
-        led::flash(led::BLUE, 250).await;
-        Timer::after(Duration::from_millis(200)).await;
-    }
-}
-
 /// 本体のボタンの長押し: もう一方の送り先へ切り替える。
 #[cfg_attr(not(feature = "trackpad"), allow(dead_code))]
 fn request_profile_toggle() {
@@ -563,7 +553,7 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
-    // オンボードの RGB LED（GPIO48）。トラックパッドの準備ができるまで赤（触らない）、できたら緑、パッドが見つからなければ青。
+    // オンボードの RGB LED（GPIO48）。トラックパッドの準備ができるまで赤（触らない）、できたら送り先の色（1 台目 = 緑、2 台目 = 青）、パッドが見つからなければ赤の点滅。
     led::init(peripherals.RMT, peripherals.GPIO48);
 
     // 設定（置き方・送り先・スクロールの向き）を最初に読む。送り先で BLE のアドレスと名前が決まる。
@@ -701,7 +691,9 @@ async fn main(spawner: Spawner) -> ! {
 
     let address = Address::random(PROFILE_ADDRESSES[config.profile as usize]);
     info!("profile {}: advertising as {}", config.profile + 1, name);
-    spawner.spawn(show_profile(config.profile).unwrap());
+    // トラックパッドなしの版: 送り先の色をすぐ出す（ありの版はキャリブレーションの後に trackpad が出す）
+    #[cfg(not(feature = "trackpad"))]
+    led::set(led::ready(config.profile));
     let stack = trouble_host::new(controller, &mut resources)
         .set_random_address(address)
         .set_io_capabilities(IoCapabilities::NoInputNoOutput)

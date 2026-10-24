@@ -230,18 +230,26 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
     match pad.init_relative(&mut Delay::new(), REL_OPTIONS) {
         Ok(i) => {
             info!("trackpad: relative mode, firmware id={:#04x} version={:#04x}", i.firmware_id, i.firmware_version);
-            crate::led::set(crate::led::GREEN); // キャリブレーション完了。触ってよい
+            // キャリブレーション完了。触ってよい。色で送り先を示す（1 台目 = 緑、2 台目 = 青）
+            crate::led::set(crate::led::ready(crate::settings::get().profile));
         }
-        Err(hikyaku_pinnacle::Error::BadId(id)) => {
-            crate::led::set(crate::led::BLUE);
+        Err(e) => {
             // 配線（MISO・電源・GND・CS）が外れていると、0x00 や 0xFC が読める。ゴミを送らないよう、ここで止める。
-            warn!("trackpad: wrong firmware id {:#04x} (expected 0x07). Check the 12-pin FFC / wiring. Trackpad disabled.", id);
-            return;
-        }
-        Err(_) => {
-            crate::led::set(crate::led::BLUE);
-            warn!("trackpad: init failed (check wiring)");
-            return;
+            match e {
+                hikyaku_pinnacle::Error::BadId(id) => warn!(
+                    "trackpad: wrong firmware id {:#04x} (expected 0x07). Check the 12-pin FFC / wiring. Trackpad disabled.",
+                    id
+                ),
+                _ => warn!("trackpad: init failed (check wiring)"),
+            }
+            // パッドが見つからない: 赤と、送り先の色を交互に点滅させる（キーボードはそのまま使える）
+            let ready = crate::led::ready(crate::settings::get().profile);
+            loop {
+                crate::led::set(crate::led::RED);
+                Timer::after(Duration::from_millis(400)).await;
+                crate::led::set(ready);
+                Timer::after(Duration::from_millis(400)).await;
+            }
         }
     }
 

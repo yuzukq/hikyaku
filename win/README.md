@@ -10,6 +10,11 @@ Ctrl+Alt+R でリングを出す。仕様は [docs/design/ring.md](../docs/desig
 | `RingProbe` | 試作: Windows が、HID として接続中の hikyaku の独自サービスをアプリに開かせるかの確認 |
 | `HikyakuRing` | アプリ本体（トレイ・リング・ノブ・設定画面・音量 / 明るさ / シーク） |
 
+## ダウンロード
+
+GitHub の **Releases → windows-latest → hikyaku-windows.zip**（`win/` を変えて main に push すると、GitHub Actions が Windows でビルドして置き直す。
+`.github/workflows/windows.yml`。Actions の画面から手動でも動かせる）。
+
 ## ビルド
 
 ```sh
@@ -22,7 +27,7 @@ exe は .NET のランタイムを同梱した単一ファイル（Windows に .
 
 ## Windows での試し方
 
-1. hikyaku を 2 台目（`hikyaku2`）に切り替える（7sPro の F22、または本体のボタンをパッドに触れずに 3 秒押し続ける。LED が青く 2 回点滅）
+1. hikyaku を 2 台目（`hikyaku2`）に切り替える（7sPro の F22、または本体のボタンをパッドに触れずに 3 秒押し続ける。LED が青になる。1 台目は緑）
 2. Windows の設定 → Bluetooth とデバイス → デバイスの追加 → Bluetooth → `hikyaku2` を選んでペアリング。キー・マウス・スクロールが動くか確かめる
 3. `RingProbe.exe` をコマンドプロンプトで実行する。「購読: Success」「設定: …」が出て、F23 や「o + Enter」でリングを開くと、
    指の角度が流れてくれば成功（Windows でも独自サービスを開ける）

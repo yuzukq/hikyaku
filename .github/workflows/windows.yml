@@ -1,0 +1,57 @@
+# Windows アプリ（win/）をビルドして、Release「windows-latest」に hikyaku-windows.zip を置く。
+# main の win/ が変わったとき、または Actions の画面から手動で（workflow_dispatch）。
+# ダウンロード: リポジトリの Releases → windows-latest → hikyaku-windows.zip
+name: Windows app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "win/**"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-app
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Test
+        working-directory: win
+        run: dotnet test RingCore.Tests --nologo
+
+      - name: Publish
+        working-directory: win
+        run: |
+          $args = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true',
+                    '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:EnableCompressionInSingleFile=true',
+                    '-p:DebugType=none', '--nologo', '-o', 'out')
+          dotnet publish HikyakuRing @args
+          dotnet publish RingProbe @args
+          Compress-Archive -Path out/HikyakuRing.exe, out/RingProbe.exe -DestinationPath out/hikyaku-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hikyaku-windows
+          path: win/out/hikyaku-windows.zip
+
+      # 毎回同じ名前の Release を作り直す（いつも最新のものが同じ場所にある）
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete windows-latest --yes --cleanup-tag 2>$null
+          $notes = "main の ${{ github.sha }} からビルドした Windows アプリ（自動）。`n`nHikyakuRing.exe = アプリ本体、RingProbe.exe = 独自サービスを開けるかの確認用。使い方は win/README.md。"
+          gh release create windows-latest win/out/hikyaku-windows.zip --prerelease --title "Windows アプリ（最新）" --notes $notes --target ${{ github.sha }}
