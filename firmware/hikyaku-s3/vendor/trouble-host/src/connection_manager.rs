@@ -519,6 +519,7 @@ impl<'d, P: PacketPool> ConnectionManager<'d, P> {
                 // Default ATT MTU is 23
                 storage.att_mtu = 23;
                 storage.att_mtu_exchanged = false;
+                storage.own_mtu_request_pending = false;
                 storage.handle.replace(handle);
                 #[cfg(feature = "security")]
                 let identity = self
@@ -732,6 +733,25 @@ impl<'d, P: PacketPool> ConnectionManager<'d, P> {
             }
         }
         true
+    }
+
+    /// hikyaku: こちらから送った MTU 交換の要求について、応答待ちの印を立てる / 応答が来たら取り下げる（`take`）。
+    pub(crate) fn set_own_mtu_request_pending(&self, conn: ConnHandle, pending: bool) {
+        for storage in self.connections.borrow_mut().iter_mut() {
+            if matches!(storage.state, ConnectionState::Connecting | ConnectionState::Connected) && storage.handle == Some(conn) {
+                storage.own_mtu_request_pending = pending;
+                return;
+            }
+        }
+    }
+
+    pub(crate) fn take_own_mtu_request_pending(&self, conn: ConnHandle) -> bool {
+        for storage in self.connections.borrow_mut().iter_mut() {
+            if matches!(storage.state, ConnectionState::Connecting | ConnectionState::Connected) && storage.handle == Some(conn) {
+                return core::mem::replace(&mut storage.own_mtu_request_pending, false);
+            }
+        }
+        false
     }
 
     pub(crate) fn exchange_att_mtu(&self, conn: ConnHandle, mtu: u16) -> u16 {
@@ -1157,6 +1177,8 @@ pub struct ConnectionStorage<P> {
     pub att_mtu: u16,
     /// hikyaku: この接続で、相手からの ATT MTU 交換の要求にもう応答したか（2 回目以降は応答しない）
     pub att_mtu_exchanged: bool,
+    /// hikyaku: こちら（周辺機器）から送った ATT MTU 交換の要求の応答を待っている（応答は GATT クライアントに渡さない）
+    pub own_mtu_request_pending: bool,
     pub link_credits: usize,
     pub link_credit_waker: WakerRegistration,
     pub refcount: u8,
@@ -1269,6 +1291,7 @@ impl<P> ConnectionStorage<P> {
             params: ConnParams::new(),
             att_mtu: 23,
             att_mtu_exchanged: false,
+            own_mtu_request_pending: false,
             link_credits: 0,
             link_credit_waker: WakerRegistration::new(),
             refcount: 0,

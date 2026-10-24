@@ -528,6 +528,10 @@ where
                     );
                     let mut m = self.metrics.borrow_mut();
                     m.connect_events = m.connect_events.wrapping_add(1);
+                    drop(m);
+                    if role == LeConnRole::Peripheral {
+                        self.send_own_mtu_request(handle);
+                    }
                 }
             }
             Err(bt_hci::param::Error::ADV_TIMEOUT) => {
@@ -543,6 +547,36 @@ where
             }
         }
         true
+    }
+
+    /// hikyaku: 周辺機器として接続したら、こちらから ATT MTU 交換の要求を送る（BlueZ や市販の機器と同じ）。Windows（TP-Link /
+    /// Realtek のアダプタ）は、自分から交換すると同じ要求を 2 回送り、2 回目への応答の有無にかかわらず切断した（2026-10-24）。
+    /// 先にこちらで MTU を決めて、Windows が要求を 2 回出さないようにする。応答は `handle_acl` で受ける。
+    fn send_own_mtu_request(&self, handle: ConnHandle) {
+        let Some(mut buf) = P::allocate() else {
+            warn!("[host] no buffer for the ATT MTU request");
+            return;
+        };
+        let mut w = WriteCursor::new(buf.as_mut());
+        let mtu = P::MTU as u16 - 4;
+        let written = w
+            .write_hci(&L2capHeader {
+                channel: L2CAP_CID_ATT,
+                length: 3,
+            })
+            .and_then(|_| w.write(att::Att::Client(AttClient::Request(att::AttReq::ExchangeMtu { mtu }))));
+        if written.is_err() {
+            return;
+        }
+        let len = w.len();
+        self.connections.set_own_mtu_request_pending(handle, true);
+        match self.connections.try_outbound(handle, Pdu::new(buf, len)) {
+            Ok(()) => info!("[host] requested att MTU of {}", mtu),
+            Err(e) => {
+                warn!("[host] sending the ATT MTU request failed: {:?}", e);
+                self.connections.set_own_mtu_request_pending(handle, false);
+            }
+        }
     }
 
     fn handle_acl(&self, acl: AclPacket<'_>, event_handler: &dyn EventHandler) -> Result<(), Error> {
@@ -756,8 +790,11 @@ where
                 } else if let Ok(att::Att::Server(AttServer::Response(att::AttRsp::ExchangeMtu { mtu }))) = a {
                     info!("[host] remote agreed att MTU of {}", mtu);
                     self.connections.exchange_att_mtu(acl.handle(), mtu);
-                    #[cfg(feature = "gatt")]
-                    self.connections.post_gatt_client(acl.handle(), pdu)?;
+                    // hikyaku: こちらから送った要求（send_own_mtu_request）の応答は、待っている GATT クライアントが無いので渡さない
+                    if !self.connections.take_own_mtu_request_pending(acl.handle()) {
+                        #[cfg(feature = "gatt")]
+                        self.connections.post_gatt_client(acl.handle(), pdu)?;
+                    }
                 } else {
                     #[cfg(feature = "gatt")]
                     match a {
