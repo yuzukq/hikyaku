@@ -19,15 +19,16 @@ import Testing
 
 @Test func parsesSettingsEvent() {
     // ring.rs の encodes_events と同じバイト列（右に 90°）
-    #expect(RingEvent(Data([4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5])) == .settings(rotation: .r90))
-    #expect(RingEvent(Data([4, 3] + Array(repeating: 0, count: 10))) == .settings(rotation: .r270))
+    // ring.rs の encodes_events と同じ（右に 90°、2 台目、スクロール反転）
+    #expect(RingEvent(Data([4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 5])) == .settings(rotation: .r90, profile: 1, scrollInvert: true))
+    #expect(RingEvent(Data([4, 3] + Array(repeating: 0, count: 10))) == .settings(rotation: .r270, profile: 0, scrollInvert: false))
     #expect(RingEvent(Data([4, 4] + Array(repeating: 0, count: 10))) == nil)
 }
 
 @Test func settingsEventDoesNotTouchTheRing() {
     var m = RingMachine(actions: RingConfig.standard.items.map(\.action))
     #expect(m.handle(.opened, at: 0) == [.show])
-    #expect(m.handle(.settings(rotation: .r270), at: 0.01) == [])
+    #expect(m.handle(.settings(rotation: .r270, profile: 0, scrollInvert: true), at: 0.01) == [])
     #expect(m.mode == .selecting(hover: nil))
 }
 
@@ -47,6 +48,8 @@ import Testing
     // ring.rs の parses_commands と同じ
     #expect(RingCommand.setRotation(.r270).bytes == [0x20, 3])
     #expect(RingCommand.getSettings.bytes == [0x21])
+    #expect(RingCommand.setScrollInvert(true).bytes == [0x22, 1])
+    #expect(RingCommand.switchProfile(1).bytes == [0x23, 1])
 }
 
 // MARK: - キー

@@ -15,13 +15,13 @@ use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{with_timeout, Duration, Timer};
 use bond_store::BondStore;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use esp_hal::clock::CpuClock;
 use esp_storage::FlashStorage;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::usb::otg::{embassy_usb_host::Driver as HostDriver, Usb};
 
-use embassy_futures::select::{select, select3, Either, Either3};
+use embassy_futures::select::{select, select3, select4, Either, Either3, Either4};
 use embassy_usb_driver::host::{pipe, DeviceEvent, UsbHostAllocator, UsbHostController, UsbPipe};
 use embassy_usb_driver::Speed;
 use embassy_usb_driver::{EndpointInfo, EndpointType};
@@ -43,14 +43,20 @@ extern crate alloc;
 mod bond_store;
 mod led;
 mod ota;
-#[cfg(feature = "trackpad")]
 mod settings;
 #[cfg(feature = "trackpad")]
 mod trackpad;
 
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 3;
-const NAME: &str = "hikyaku";
+/// 送り先（プロファイル）ごとの名前と BLE アドレス（docs/design/multi-host.md）。送り先ごとに別の機器として見えるので、
+/// Mac は hikyaku、Windows は hikyaku2 だけを覚え、別の送り先で待っている間につなぎに来ない。
+/// 1 台目は 2026-10 までと同じアドレス（Mac の再ペアリングが要らない）。ランダムの静的アドレスなので、最上位バイトの上 2 ビットは 1。
+const PROFILE_NAMES: [&str; settings::PROFILES as usize] = ["hikyaku", "hikyaku2"];
+/// 2 台目の IRK（ペアリングで相手に渡す。RPA は使わないので、固定の値でよい）。
+const PROFILE2_IRK: u128 = 0x6869_6b79_616b_7532_5f69_726b_5f76_3031;
+const PROFILE_ADDRESSES: [[u8; 6]; settings::PROFILES as usize] =
+    [[0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff], [0xfe, 0x8f, 0x1a, 0x05, 0xe4, 0xff]];
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -102,6 +108,36 @@ const OTA_BOOT_MAGIC: u32 = 0x4F54_4131;
 static mut OTA_BOOT_FLAG: u32 = 0;
 
 /// OTA モードで再起動する。
+/// 送り先（プロファイル）を切り替える要求（F21 / F22・本体のボタンの長押し・アプリの命令）。値は切り替え先。
+static PROFILE_SWITCH: Signal<CriticalSectionRawMutex, u8> = Signal::new();
+
+/// 送り先を切り替えるための再起動のフラグ（RTC メモリ）。立っていたら、USB の書き換え猶予（3 秒）を飛ばし、LED で送り先を示す。
+const SWITCH_BOOT_MAGIC: u32 = 0x5357_4348;
+#[esp_hal::ram(unstable(rtc_fast, persistent))]
+static mut SWITCH_BOOT_FLAG: u32 = 0;
+
+/// 送り先を保存して再起動する。起動し直すと、その送り先のアドレス・名前・ペア情報でつなぐ。
+fn switch_profile_and_reboot(flash: &RefCell<FlashStorage<'_>>, profile: u8) -> ! {
+    info!("profile: switching to {} ({})", profile + 1, PROFILE_NAMES[profile as usize]);
+    settings::update(flash, |s| s.profile = profile);
+    unsafe { core::ptr::addr_of_mut!(SWITCH_BOOT_FLAG).write_volatile(SWITCH_BOOT_MAGIC) };
+    esp_hal::system::software_reset()
+}
+
+/// 起動時に呼ぶ。送り先の切り替えでの再起動なら true（フラグはここで消す）。
+fn take_switch_boot_flag() -> bool {
+    let flag = unsafe { core::ptr::addr_of_mut!(SWITCH_BOOT_FLAG) };
+    let on = unsafe { flag.read_volatile() } == SWITCH_BOOT_MAGIC;
+    unsafe { flag.write_volatile(0) };
+    on
+}
+
+/// 本体のボタンの長押し: もう一方の送り先へ切り替える。
+#[cfg_attr(not(feature = "trackpad"), allow(dead_code))]
+fn request_profile_toggle() {
+    PROFILE_SWITCH.signal((settings::get().profile + 1) % settings::PROFILES);
+}
+
 fn request_ota_reboot() -> ! {
     info!("ota: rebooting into OTA mode");
     unsafe { core::ptr::addr_of_mut!(OTA_BOOT_FLAG).write_volatile(OTA_BOOT_MAGIC) };
@@ -225,6 +261,12 @@ fn media_report(buf: &[u8]) -> Option<Report> {
 /// 7sPro では、親指キーの長押し（QMK のモッドタップ）に F24 を割り当てている。
 #[allow(unused_mut)]
 fn forward_key(mut r: [u8; 8]) {
+    // F21 / F22: 送り先を 1 台目 / 2 台目に切り替える（ホストには送らない）。今の送り先なら何もしない
+    for (key, profile) in [(hikyaku_hid::KEY_F21, 0u8), (hikyaku_hid::KEY_F22, 1u8)] {
+        if hikyaku_hid::take_key(&mut r, key) && settings::get().profile != profile {
+            PROFILE_SWITCH.signal(profile);
+        }
+    }
     #[cfg(feature = "trackpad")]
     {
         use core::sync::atomic::{AtomicBool, Ordering};
@@ -299,11 +341,14 @@ const USB_REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
 /// USB ホスト：つながったキーボード（ブートプロトコル）を読んで REPORTS に流す。
 #[cfg_attr(feature = "usb-log", allow(dead_code))]
 #[embassy_executor::task]
-async fn usb_host(usb: Usb<'static>) {
+async fn usb_host(usb: Usb<'static>, fast_start: bool) {
     static BUS_STATE: BusState = BusState::new();
     // ホストにすると USB シリアル/JTAG（書き込み用）が使えなくなる。
     // 起動後しばらくは猶予を置き、その間なら espflash で書き換えられるようにする。
-    Timer::after(Duration::from_secs(3)).await;
+    // 送り先の切り替えでの再起動なら、待たない（書き換えるときは電源を入れ直すので、猶予はそこで取れる）。
+    if !fast_start {
+        Timer::after(Duration::from_secs(3)).await;
+    }
     let (mut ctrl, handle) = bus(HostDriver::new(usb), &BUS_STATE);
     let mut cfg = [0u8; 256];
     // 認識・登録に失敗したとき、挿し直しを待たずにバスリセットでやり直す。retry = やり直すときの速度と回数
@@ -428,7 +473,8 @@ async fn usb_host(usb: Usb<'static>) {
 
 /// `connections_max` は、購読（CCCD）の状態を覚えておく相手の数。既定の 1 だと、Mac が使った枠のせいで、
 /// 別の相手（OTA 用の PC や 2 台目のホスト）が通知を購読できなくなる。
-#[gatt_server(connections_max = 4)]
+/// `attribute_table_size` は、2 台目の GAP / GATT サービス（`windows_gap_table`）が既定より 1 つ多いので、余裕を持たせる。
+#[gatt_server(connections_max = 4, attribute_table_size = 64)]
 struct Server {
     hid: HidService,
     battery: BatteryService,
@@ -436,6 +482,18 @@ struct Server {
     ota: OtaService,
     /// ショートカットリング（docs/design/ring.md）。OTA の後ろに足して、既存サービスのハンドルを動かさない。
     ring: RingService,
+    /// Device Information（PnP ID）。HID over GATT の仕様で必須で、Windows はこれが無いとつながらないことがある。
+    /// 末尾に足して、既存サービスのハンドルを動かさない（Mac の再ペアリングが要らない）。
+    device_info: DeviceInfoService,
+}
+
+/// PnP ID: ベンダー ID の出所 = Bluetooth SIG（0x01）、会社 = Espressif（0x02E5）、製品 0x0001、版 0x0100。
+#[gatt_service(uuid = "180a")]
+struct DeviceInfoService {
+    #[characteristic(uuid = "2a29", read, value = [b'h', b'i', b'k', b'y', b'a', b'k', b'u'])]
+    manufacturer: [u8; 7],
+    #[characteristic(uuid = "2a50", read, value = [0x01, 0xE5, 0x02, 0x01, 0x00, 0x00, 0x01])]
+    pnp_id: [u8; 7],
 }
 
 /// ショートカットリング。state: hikyaku → アプリ（開いた・閉じた・指の位置。12 バイト）、ctrl: アプリ → hikyaku（HELLO・CLOSE・OPEN）。
@@ -498,8 +556,21 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
-    // オンボードの RGB LED（GPIO48）。トラックパッドの準備ができるまで赤（触らない）、できたら緑、パッドが見つからなければ青。
+    // オンボードの RGB LED（GPIO48）。トラックパッドの準備ができるまで赤（触らない）、できたら送り先の色（1 台目 = 緑、2 台目 = 青）、パッドが見つからなければ赤の点滅。
     led::init(peripherals.RMT, peripherals.GPIO48);
+
+    // 設定（置き方・送り先・スクロールの向き）を最初に読む。送り先で BLE のアドレスと名前が決まる。
+    let flash = RefCell::new(FlashStorage::new(peripherals.FLASH));
+    ota::mark_app_valid(&flash);
+    let config = settings::load(&flash);
+    let switched = take_switch_boot_flag();
+    #[cfg(feature = "trackpad")]
+    {
+        use core::sync::atomic::Ordering;
+        trackpad::ROTATION.store(config.rotation, Ordering::Relaxed);
+        trackpad::SCROLL_INVERT.store(config.scroll_invert_now(), Ordering::Relaxed);
+    }
+    let name = PROFILE_NAMES[config.profile as usize];
     #[cfg(feature = "trackpad")]
     led::set(led::RED);
 
@@ -605,7 +676,7 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(not(feature = "usb-log"))]
     {
         let usb = Usb::new_fs(peripherals.USB_FS, peripherals.GPIO20, peripherals.GPIO19);
-        spawner.spawn(usb_host(usb).unwrap());
+        spawner.spawn(usb_host(usb, switched).unwrap());
     }
     #[cfg(feature = "usb-log")]
     info!("usb-log: logging over the S3 USB-C; USB host (keyboard) is disabled");
@@ -621,17 +692,28 @@ async fn main(spawner: Spawner) -> ! {
     let mut resources: HostResources<_, DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
         HostResources::new();
 
-    let address = Address::random([0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff]);
-    let stack = trouble_host::new(controller, &mut resources)
+    let address = Address::random(PROFILE_ADDRESSES[config.profile as usize]);
+    info!("profile {}: advertising as {}", config.profile + 1, name);
+    // トラックパッドなしの版: 送り先の色をすぐ出す（ありの版はキャリブレーションの後に trackpad が出す）
+    #[cfg(not(feature = "trackpad"))]
+    led::set(led::ready(config.profile));
+    let mut builder = trouble_host::new(controller, &mut resources)
         .set_random_address(address)
-        .set_io_capabilities(IoCapabilities::NoInputNoOutput)
-        .build();
-    // 保存済みのペア情報を復元する（Mac 側で削除しない限り、再起動後も再ペアリング不要）。
-    let flash = RefCell::new(FlashStorage::new(peripherals.FLASH));
-    ota::mark_app_valid(&flash);
-    #[cfg(feature = "trackpad")]
-    trackpad::ROTATION.store(settings::load_rotation(&flash).quarters(), core::sync::atomic::Ordering::Relaxed);
-    let store = RefCell::new(BondStore::load(&flash));
+        .set_io_capabilities(IoCapabilities::NoInputNoOutput);
+    // 2 台目（Windows）: ペアリングで渡す IRK を、全部ゼロではない固定の値にする。trouble-host は IRK が無いと
+    // ゼロの IRK を渡し、Windows はペアリングの後の準備（GATT を読んで HID の機器を作る）をしなかった（2026-10-24）。
+    // IRK を持つとアドレスが RPA になるので、広告は固定のランダムアドレスのまま（`advertise_params`）。
+    // 1 台目（Mac）は今までどおり（ペア情報を作り直さないため）。
+    if config.profile == 1 {
+        builder = builder.enable_privacy(IdentityResolvingKey::new(PROFILE2_IRK).unwrap());
+    }
+    let stack = builder.build();
+    let advertise_params = AdvertisementParameters {
+        own_addr_kind: (config.profile == 1).then_some(AddrKind::RANDOM),
+        ..Default::default()
+    };
+    // 今の送り先の、保存済みのペア情報を復元する（ホスト側で削除しない限り、再起動後も再ペアリング不要）。
+    let store = RefCell::new(BondStore::load(&flash, config.profile));
     for bond in store.borrow().bonds() {
         if let Err(e) = stack.add_bond_information(bond.clone()) {
             warn!("restore bond failed: {:?}", e);
@@ -640,14 +722,22 @@ async fn main(spawner: Spawner) -> ! {
     let mut peripheral = stack.peripheral();
     let mut runner = stack.runner();
 
-    let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-        name: NAME,
-        appearance: &appearance::human_interface_device::KEYBOARD,
-    }))
-    .unwrap();
+    // 1 台目（Mac）は trouble-host の既定の GAP / GATT サービス（ハンドルを動かさない）。2 台目（Windows）は自前（`windows_gap_table`）。
+    let (server, service_changed) = if config.profile == 1 {
+        let mut table = AttributeTable::new();
+        let service_changed = windows_gap_table(&mut table, name);
+        (Server::new(table), Some(service_changed))
+    } else {
+        let gap = GapConfig::Peripheral(PeripheralConfig {
+            name,
+            appearance: &appearance::human_interface_device::KEYBOARD,
+        });
+        (Server::new_with_config(gap).unwrap(), None)
+    };
 
     info!(
-        "handles: kbd={}/{:?} leds={} mouse={}/{:?} consumer={}/{:?}",
+        "handles: report_map={} kbd={}/{:?} leds={} mouse={}/{:?} consumer={}/{:?}",
+        server.hid.report_map.handle,
         server.hid.keyboard_in.handle,
         server.hid.keyboard_in.cccd_handle,
         server.hid.keyboard_leds.handle,
@@ -662,21 +752,36 @@ async fn main(spawner: Spawner) -> ! {
             ota_mode(&mut peripheral, &server, &flash).await;
         }
         loop {
-            let conn = match select(advertise(&mut peripheral, &server, NAME, &Default::default()), OTA_REQUEST.wait()).await {
-                Either::First(Ok(conn)) => conn,
-                Either::First(Err(e)) => {
+            let conn = match select3(
+                advertise(&mut peripheral, &server, name, &advertise_params),
+                OTA_REQUEST.wait(),
+                PROFILE_SWITCH.wait(),
+            )
+            .await
+            {
+                Either3::First(Ok(conn)) => conn,
+                Either3::First(Err(e)) => {
                     warn!("advertise error: {:?}", e);
                     Timer::after(Duration::from_secs(1)).await;
                     continue;
                 }
-                Either::Second(()) => request_ota_reboot(),
+                Either3::Second(()) => request_ota_reboot(),
+                Either3::Third(p) => switch_profile_and_reboot(&flash, p),
             };
             info!("connected");
             // ボンディングを許可（これが無いと PairingComplete の bond が None になり保存されない）。
             let _ = conn.raw().set_bondable(true);
-            let _ = conn.raw().request_security();
-            if let SessionEnd::Ota = session(&server, &conn, &store, &flash).await {
-                request_ota_reboot();
+            match session(&server, &conn, &store, &flash, service_changed.as_ref()).await {
+                SessionEnd::Ota => request_ota_reboot(),
+                SessionEnd::Switch(p) => {
+                    // ホストに押しっぱなしを残さないよう、切る前に全解放を送ってから切り替える
+                    let _ = server.hid.keyboard_in.notify(&conn, &[0; 8], false).await;
+                    let _ = server.hid.mouse_in.notify(&conn, &[0; 5], false).await;
+                    conn.raw().disconnect();
+                    Timer::after(Duration::from_millis(100)).await;
+                    switch_profile_and_reboot(&flash, p)
+                }
+                SessionEnd::Disconnected => {}
             }
             info!("disconnected");
         }
@@ -685,6 +790,28 @@ async fn main(spawner: Spawner) -> ! {
     loop {
         Timer::after(Duration::from_secs(1)).await;
     }
+}
+
+/// 2 台目（Windows）の GAP / GATT サービス。trouble-host の既定（`GapConfig`）との違いは 2 つ:
+/// - GATT サービス（0x1801）に Service Changed（0x2A05、indicate）を置く。既定では 0x1801 が空で、Windows は
+///   ペアリングの前に 0x1801 だけを見つけたまま、ペアリングの後にサービスを発見せず、HID の機器を作らなかった（2026-10-24。
+///   docs/design/multi-host.md）。ペアリングの後にこれで「全部変わった」と知らせ、発見をやり直させる（`session`）
+/// - GAP に Central Address Resolution を置かない（周辺機器には不要。ふつうの HID 機器にも無い）
+/// （`RawMutex` は trouble-host が使う版の embassy-sync のもの。このクレートが直接使う版とは違う）
+fn windows_gap_table<'d, M: trouble_host::__export::embassy_sync::blocking_mutex::raw::RawMutex, const MAX: usize>(
+    table: &mut AttributeTable<'d, M, MAX>,
+    name: &'d str,
+) -> Characteristic<[u8; 4]> {
+    let mut gap = table.add_service(Service::new(service::GAP));
+    gap.add_characteristic_ro(characteristic::DEVICE_NAME, name);
+    gap.add_characteristic_ro(characteristic::APPEARANCE, &appearance::human_interface_device::KEYBOARD);
+    gap.build();
+    let mut gatt = table.add_service(Service::new(service::GATT));
+    let service_changed = gatt
+        .add_characteristic_small(characteristic::SERVICE_CHANGED, [CharacteristicProp::Indicate], [0u8; 4])
+        .build();
+    gatt.build();
+    service_changed
 }
 
 async fn advertise<'v, 's, C: Controller>(
@@ -698,6 +825,8 @@ async fn advertise<'v, 's, C: Controller>(
         &[
             AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
             AdStructure::CompleteServiceUuids16(&[[0x12, 0x18]]),
+            // 外見 = キーボード（0x03C1）。Windows 11 の標準の検出は、何の機器か分からないものを「デバイスの追加」の一覧に出さない
+            AdStructure::Unknown { ty: 0x19, data: &[0xC1, 0x03] },
             AdStructure::CompleteLocalName(name.as_bytes()),
         ],
         &mut adv[..],
@@ -714,13 +843,61 @@ async fn advertise<'v, 's, C: Controller>(
 }
 
 /// 接続中の処理。GATT イベントを捌きつつ、USB キーボードのレポートを BLE へ流す。
-async fn session<P: PacketPool>(
+async fn session(
     server: &Server<'_>,
-    conn: &GattConnection<'_, '_, P>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
     store: &RefCell<BondStore<'_, '_>>,
     #[cfg_attr(not(feature = "trackpad"), allow(unused_variables))] flash: &RefCell<FlashStorage<'_>>,
+    service_changed: Option<&Characteristic<[u8; 4]>>,
 ) -> SessionEnd {
-    let events = async {
+    // 2 台目（Windows）: この接続でペアリングが済み、相手が Service Changed を購読したら、全体（0x0001〜0xFFFF）が
+    // 変わったと 1 回だけ知らせ、サービスの発見をやり直させる（`windows_gap_table`）。
+    let paired = Cell::new(false);
+    let service_changed_subscribed = Cell::new(false);
+    let service_changed_kick: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+    let service_changed_task = async {
+        let Some(sc) = service_changed else {
+            return core::future::pending::<()>().await;
+        };
+        loop {
+            service_changed_kick.wait().await;
+            if paired.get() && service_changed_subscribed.get() {
+                info!("service changed: asking the host to discover the services again");
+                if let Err(e) = sc.indicate(conn, &[0x01, 0x00, 0xff, 0xff], false).await {
+                    warn!("service changed: indicate failed: {:?}", e);
+                }
+                return core::future::pending::<()>().await;
+            }
+        }
+    };
+    // 相手が自分から暗号化（ペアリング）を始めなければ、1.5 秒後に hikyaku から求める。つないだ瞬間に求めると、
+    // Windows の「デバイスの追加」が始めるペアリングとぶつかって失敗した（2026-10-24。Mac・Linux は平気だった）。
+    // 2 台目（Windows）では求めない: Windows は必ず自分からペアリングを始め、ペアリングの途中はまだ「暗号化なし」に
+    // 見えるので、1.5 秒後の要求がペアリングに割り込んでいた（2026-10-24）。
+    let security = async {
+        if service_changed.is_some() {
+            return core::future::pending::<()>().await;
+        }
+        Timer::after(Duration::from_millis(1500)).await;
+        if matches!(conn.raw().security_level(), Ok(SecurityLevel::NoEncryption)) {
+            info!("not encrypted yet, requesting security");
+            let _ = conn.raw().request_security();
+        }
+        core::future::pending::<()>().await
+    };
+    // ボンド済みの相手の購読の状態（CCCD）を、再起動後の最初の接続で戻す。つなぎ直しても CCCD を書き直さない相手
+    // （Windows）でも、再起動の後に通知が届くように（bond_store）。
+    let peer = conn.raw().peer_identity();
+    if let Some(bytes) = store.borrow_mut().cccd_to_restore(&peer) {
+        match ClientAttTableView::try_from_raw(&bytes) {
+            Ok(view) => {
+                server.set_client_att_table(conn.raw(), &view);
+                info!("restored subscriptions ({} bytes)", bytes.len());
+            }
+            Err(_) => warn!("saved subscriptions are invalid, ignoring"),
+        }
+    }
+    let events_loop = async {
         loop {
             match conn.next().await {
                 GattConnectionEvent::Disconnected { reason } => {
@@ -732,6 +909,8 @@ async fn session<P: PacketPool>(
                     if let Some(bond) = bond {
                         store.borrow_mut().save(bond);
                     }
+                    paired.set(true);
+                    service_changed_kick.signal(());
                 }
                 GattConnectionEvent::PairingFailed(e) => warn!("pairing failed: {:?}", e),
                 GattConnectionEvent::Gatt { event } => {
@@ -758,15 +937,43 @@ async fn session<P: PacketPool>(
                         GattEvent::Read(r) => debug!("gatt read handle={}", r.handle()),
                         _ => {}
                     }
+                    // Service Changed の CCCD（bit 1 = indicate）
+                    let service_changed_cccd = match (&event, service_changed.and_then(|sc| sc.cccd_handle)) {
+                        (GattEvent::Write(w), Some(h)) if w.handle() == h => {
+                            w.with_data(|_, d| Some(d.first().is_some_and(|b| b & 0x02 != 0)))
+                        }
+                        _ => None,
+                    };
+                    let is_write = matches!(&event, GattEvent::Write(_));
                     match event.accept() {
                         Ok(reply) => reply.send().await,
                         Err(e) => warn!("gatt error: {:?}", e),
+                    }
+                    // 購読の状態が変わったら保存する（変わっていなければ書かない）
+                    if is_write {
+                        if let Some(table) = server.get_client_att_table(conn.raw()) {
+                            store.borrow_mut().save_cccd(&conn.raw().peer_identity(), table.raw());
+                        }
+                    }
+                    if let Some(on) = service_changed_cccd {
+                        info!("service changed: subscribed={}", on);
+                        service_changed_subscribed.set(on);
+                        service_changed_kick.signal(());
                     }
                 }
                 _ => {}
             }
         }
     };
+    // 後回しにした ATT MTU 交換の応答（Windows が同じ要求を 2 回送る件。vendor/README.md）を、相手から ATT が 500 ms 来ていない
+    // 静かなとき（遅くとも 20 秒後。Windows の時間切れは 30 秒）に送る。
+    let deferred_mtu = async {
+        loop {
+            Timer::after(Duration::from_millis(100)).await;
+            conn.raw().send_deferred_mtu_response(Duration::from_millis(500), Duration::from_secs(20));
+        }
+    };
+    let events = select4(events_loop, security, service_changed_task, deferred_mtu);
     // 接続前に溜まったレポートは捨てる（古い押下が残って暴走しないように）。
     REPORTS.clear();
     let forward = async {
@@ -785,7 +992,7 @@ async fn session<P: PacketPool>(
         }
         loop {
             let r = REPORTS.receive().await;
-            debug!("forward report");
+            log::trace!("forward report");
             let res = match r {
                 Report::Key(v) => server.hid.keyboard_in.notify(conn, &v, false).await,
                 Report::Mouse(v) => server.hid.mouse_in.notify(conn, &v, false).await,
@@ -797,8 +1004,9 @@ async fn session<P: PacketPool>(
             }
         }
     };
-    let end = match select3(events, forward, OTA_REQUEST.wait()).await {
-        Either3::Third(()) => SessionEnd::Ota,
+    let end = match select4(events, forward, OTA_REQUEST.wait(), PROFILE_SWITCH.wait()).await {
+        Either4::Third(()) => SessionEnd::Ota,
+        Either4::Fourth(p) => SessionEnd::Switch(p),
         _ => SessionEnd::Disconnected,
     };
     // 切断したら、アプリはいない。リングも閉じる。
@@ -817,8 +1025,10 @@ fn ring_ctrl(d: &[u8], flash: &RefCell<FlashStorage<'_>>) {
     use hikyaku_pointer::{ring::{Command, Event}, Rotation};
     // 今の設定をアプリへ返す
     let send_settings = || {
-        let rotation = Rotation::from_quarters(trackpad::ROTATION.load(Ordering::Relaxed)).unwrap_or_default();
-        let _ = REPORTS.try_send(Report::Ring(Event::Settings { rotation }.encode(0)));
+        let s = settings::get();
+        let rotation = Rotation::from_quarters(s.rotation).unwrap_or_default();
+        let event = Event::Settings { rotation, profile: s.profile, scroll_invert: s.scroll_invert_now() };
+        let _ = REPORTS.try_send(Report::Ring(event.encode(0)));
     };
     match Command::parse(d) {
         Some(Command::Hello) => {
@@ -827,10 +1037,22 @@ fn ring_ctrl(d: &[u8], flash: &RefCell<FlashStorage<'_>>) {
             send_settings();
         }
         Some(Command::SetRotation(r)) => {
-            if trackpad::ROTATION.swap(r.quarters(), Ordering::Relaxed) != r.quarters() {
-                settings::save_rotation(flash, r);
-            }
+            settings::update(flash, |s| s.rotation = r.quarters());
+            trackpad::ROTATION.store(r.quarters(), Ordering::Relaxed);
             send_settings();
+        }
+        Some(Command::SetScrollInvert(on)) => {
+            let s = settings::update(flash, |s| {
+                let bit = 1 << s.profile;
+                s.scroll_invert = if on { s.scroll_invert | bit } else { s.scroll_invert & !bit };
+            });
+            trackpad::SCROLL_INVERT.store(s.scroll_invert_now(), Ordering::Relaxed);
+            send_settings();
+        }
+        Some(Command::SwitchProfile(p)) => {
+            if p != settings::get().profile {
+                PROFILE_SWITCH.signal(p);
+            }
         }
         Some(Command::GetSettings) => send_settings(),
         Some(Command::Close) => trackpad::RING_CMD.signal(trackpad::RingCmd::Close),
@@ -852,6 +1074,8 @@ enum SessionEnd {
     Disconnected,
     /// キーボードから OTA モードが要求された。
     Ota,
+    /// 送り先の切り替えが要求された（値は切り替え先）。
+    Switch(u8),
 }
 
 enum Action {

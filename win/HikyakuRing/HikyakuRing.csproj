@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- hikyaku のショートカットリング（Windows アプリ）。仕様: docs/design/ring.md、docs/design/multi-host.md。Mac 版: mac/HikyakuRing -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <!-- タスクトレイのアイコン（NotifyIcon）だけに使う。WPF と型の名前がぶつかるので、暗黙の using は切る -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Hikyaku.Ring</RootNamespace>
+    <AssemblyName>HikyakuRing</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RingCore/RingCore.csproj" />
+  </ItemGroup>
+</Project>

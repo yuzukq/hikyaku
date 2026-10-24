@@ -51,6 +51,9 @@ pub static APP_PRESENT: AtomicBool = AtomicBool::new(false);
 /// アプリの命令（ring.ctrl の `20 q`）で変わる。カーソル・スクロール・リングの角度を、置いた向きに合わせて回す。
 pub static ROTATION: AtomicU8 = AtomicU8::new(0);
 
+/// 今の送り先でスクロールを反転するか（送り先ごとの設定。`settings`）。起動時とアプリの命令（`22 v`）で変わる。
+pub static SCROLL_INVERT: AtomicBool = AtomicBool::new(true);
+
 fn rotation() -> Rotation {
     Rotation::from_quarters(ROTATION.load(Ordering::Relaxed)).unwrap_or_default()
 }
@@ -188,8 +191,6 @@ const REL_GAIN_DIV: i32 = 5;
 /// 2026-10-22: 8 → 10 → 12 → 14 → 16 → 18（持ち主の希望で、指の動きに対するスクロール量を減らした）。
 const SCROLL_DIV: i32 = 18;
 
-/// スクロールの向きを反転する（2026-10-20。持ち主の Mac の設定で、反転したほうが直感どおりだった）。
-const SCROLL_INVERT: bool = true;
 
 /// 相対モードの変換の設定（上の定数をまとめたもの。`hikyaku_pointer::relative::Config::FIRMWARE_DEFAULT` と同じ値）。
 fn relay_config(rotation: Rotation) -> RelayConfig {
@@ -201,7 +202,7 @@ fn relay_config(rotation: Rotation) -> RelayConfig {
         gain_div: REL_GAIN_DIV,
         scroll_div: SCROLL_DIV,
         rotation,
-        scroll_invert: SCROLL_INVERT,
+        scroll_invert: SCROLL_INVERT.load(Ordering::Relaxed),
         // 静止中のぶれを抑える（`trackpad-still-filter`）。既定は無効。
         still: cfg!(feature = "trackpad-still-filter").then_some(StillFilter::DEFAULT),
         // 自前のタップ判定（`trackpad-soft-tap`）。既定はパッド側のタップ。
@@ -229,18 +230,26 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
     match pad.init_relative(&mut Delay::new(), REL_OPTIONS) {
         Ok(i) => {
             info!("trackpad: relative mode, firmware id={:#04x} version={:#04x}", i.firmware_id, i.firmware_version);
-            crate::led::set(crate::led::GREEN); // キャリブレーション完了。触ってよい
+            // キャリブレーション完了。触ってよい。色で送り先を示す（1 台目 = 緑、2 台目 = 青）
+            crate::led::set(crate::led::ready(crate::settings::get().profile));
         }
-        Err(hikyaku_pinnacle::Error::BadId(id)) => {
-            crate::led::set(crate::led::BLUE);
+        Err(e) => {
             // 配線（MISO・電源・GND・CS）が外れていると、0x00 や 0xFC が読める。ゴミを送らないよう、ここで止める。
-            warn!("trackpad: wrong firmware id {:#04x} (expected 0x07). Check the 12-pin FFC / wiring. Trackpad disabled.", id);
-            return;
-        }
-        Err(_) => {
-            crate::led::set(crate::led::BLUE);
-            warn!("trackpad: init failed (check wiring)");
-            return;
+            match e {
+                hikyaku_pinnacle::Error::BadId(id) => warn!(
+                    "trackpad: wrong firmware id {:#04x} (expected 0x07). Check the 12-pin FFC / wiring. Trackpad disabled.",
+                    id
+                ),
+                _ => warn!("trackpad: init failed (check wiring)"),
+            }
+            // パッドが見つからない: 赤と、送り先の色を交互に点滅させる（キーボードはそのまま使える）
+            let ready = crate::led::ready(crate::settings::get().profile);
+            loop {
+                crate::led::set(crate::led::RED);
+                Timer::after(Duration::from_millis(400)).await;
+                crate::led::set(ready);
+                Timer::after(Duration::from_millis(400)).await;
+            }
         }
     }
 
@@ -269,7 +278,7 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
         let now = Instant::now().as_millis() as u32;
 
         // 本体の置き方が変わった（アプリの設定画面から）
-        if relay.config().rotation != rotation() {
+        if relay.config().rotation != rotation() || relay.config().scroll_invert != SCROLL_INVERT.load(Ordering::Relaxed) {
             relay = Relay::new(relay_config(rotation()));
         }
 
@@ -285,6 +294,8 @@ pub async fn run(spi: Spi<'static, Blocking>, cs: Output<'static>, _dr: Input<'s
                 RING_CMD.signal(RingCmd::Close);
             }
             Some(ButtonAction::RingToggle) => RING_CMD.signal(RingCmd::Toggle),
+            // 動かさずに 3 秒押し続けた: もう一方の送り先へ切り替える
+            Some(ButtonAction::LongHold) => crate::request_profile_toggle(),
             // リング中は右クリックしない（カーソルを止めている）
             Some(ButtonAction::RightClick) if ring_last_touch.is_none() => {
                 last_buttons |= 2;

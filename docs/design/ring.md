@@ -74,6 +74,7 @@ Mac 側に hikyaku のフロントエンドとなるネイティブアプリ（S
 |---|---|
 | 0 | 種類: 1 = 開いた、2 = 閉じた、3 = 位置、4 = 設定（2026-10-23 追加） |
 | 1 | bit0 = 触れている（設定のときは本体の置き方 = 時計回りに 90° を何回か、0〜3） |
+| 2〜3 | （設定のときだけ）今の送り先（0 = 1 台目 hikyaku、1 = 2 台目 hikyaku2）、その送り先でスクロールを反転しているか（2026-10-24 追加） |
 | 2〜3 | 角度（0.01° 単位、リトルエンディアン）。0° = 上、時計回り（画面上の向き） |
 | 4〜5 | 中心からの距離（パッドの縁 ≒ 1000。外へはみ出すと 1000 を超える） |
 | 6〜7, 8〜9 | パッドの生の X, Y（調整用） |
@@ -89,6 +90,8 @@ Mac 側に hikyaku のフロントエンドとなるネイティブアプリ（S
 | `02` | 開く（アプリのボタンや試験用。F23 と同じ） |
 | `10 mm kk` | キーの組み合わせを押して離す。mm = 修飾キー（bit0 Ctrl, 1 Shift, 2 Option, 3 Command。4〜7 は右側）、kk = HID の Usage ID |
 | `20 q` | 本体の置き方を変える（q = 時計回りに 90° を何回か、0〜3。hikyaku のフラッシュに保存）。返事は設定のイベント（2026-10-23 追加） |
+| `22 v` | 今の送り先でスクロールを反転するか（v = 0 / 1。保存）。返事は設定のイベント（2026-10-24 追加） |
+| `23 p` | 送り先を p（0 / 1）に切り替える。hikyaku は保存して再起動し、その送り先の ID でつなぎ直す（今の接続は切れる。docs/design/multi-host.md） |
 | `21` | 今の設定を問い合わせる。返事は設定のイベント。`00`（HELLO）にも設定のイベントで返す |
 | `11 lo hi` | メディアキーを押して離す（Consumer の Usage、16 ビット）。音量 +0x00E9 / −0x00EA、ミュート 0x00E2、明るさ +0x006F / −0x0070、再生 0x00CD、次 0x00B5、前 0x00B6 |
 
@@ -113,7 +116,8 @@ Mac アプリでは、設定画面の「本体の向き」タブで本体の絵�
 実装: `mac/HikyakuRing`（SwiftPM。Xcode のプロジェクトは使わない）。
 
 ```sh
-mac/HikyakuRing/build.sh --open   # build/HikyakuRing.app を作って起動する（メニューバーに常駐）
+mac/HikyakuRing/build.sh --install  # 作って /Applications に入れて起動する（古い版は置き換え。普段使いはこれ）
+mac/HikyakuRing/build.sh --open   # build/HikyakuRing.app を作って、その場で起動する（試すとき）
 cd mac/HikyakuRing && swift test  # 通信の形式・選択・ノブの計算のテスト
 ```
 
@@ -127,6 +131,10 @@ cd mac/HikyakuRing && swift test  # 通信の形式・選択・ノブの計算�
   （ファームが F23 を見るのは 7sPro からの USB 入力だけ。Mac → hikyaku の HID は LED の出力レポートしかない）。
 - ログ: `log stream --predicate 'subsystem == "dev.hikyaku.ring"' --info`
 - 設定: `~/Library/Application Support/HikyakuRing/config.json`（なければ標準の 8 項目）。
+- 版: メニューに `版 コミット` と出る（build.sh が Info.plist の CFBundleVersion に入れる）。
+- GitHub Actions（`.github/workflows/mac.yml`）でも、`mac/` を変えて push するとテストとビルドをして、Releases の **mac-latest** に zip を置く。
+  ただしアドホック署名なので、入れ替えのたびに Bluetooth の許可を聞き直されることがある。入れるときは `mac/HikyakuRing/install.sh ~/Downloads/HikyakuRing-mac.zip`。
+- 設定画面の「送り先」タブで、1 台目 / 2 台目の切り替えと、送り先ごとのスクロールの向きを変えられる（Windows アプリと同じ）。
 - キーの記録: ⌘Space のように Mac が先に取るキーは記録できないので、キーだけ記録して修飾キーのボタンで足す。
 
 以下は作るときの仕様（実装はこれに沿っている）。

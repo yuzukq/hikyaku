@@ -60,8 +60,9 @@ public enum RingEvent: Equatable, Sendable {
     case opened
     case closed
     case position(RingSample)
-    /// 今の設定（HELLO・問い合わせ・変更への返事）
-    case settings(rotation: DeviceRotation)
+    /// 今の設定（HELLO・問い合わせ・変更への返事）。profile = 今の送り先（0 = 1 台目 hikyaku、1 = 2 台目 hikyaku2）、
+    /// scrollInvert = その送り先でスクロールを反転しているか
+    case settings(rotation: DeviceRotation, profile: Int, scrollInvert: Bool)
 
     /// state の 12 バイトを読む。形式が違えば nil。
     public init?(_ data: Data) {
@@ -83,7 +84,7 @@ public enum RingEvent: Equatable, Sendable {
             ))
         case 4:
             guard let rotation = DeviceRotation(rawValue: Int(b[1])) else { return nil }
-            self = .settings(rotation: rotation)
+            self = .settings(rotation: rotation, profile: Int(b[2]), scrollInvert: b[3] != 0)
         default: return nil
         }
     }
@@ -103,6 +104,10 @@ public enum RingCommand: Equatable, Sendable {
     case setRotation(DeviceRotation)
     /// 今の設定を問い合わせる。返事は settings のイベント
     case getSettings
+    /// 今の送り先でスクロールを反転するか（hikyaku に保存される）。返事は settings のイベント
+    case setScrollInvert(Bool)
+    /// 送り先を切り替える。hikyaku は再起動して、その送り先の ID でつなぎ直す（この Mac との接続は切れる）
+    case switchProfile(Int)
 
     public var bytes: [UInt8] {
         switch self {
@@ -113,6 +118,8 @@ public enum RingCommand: Equatable, Sendable {
         case .consumer(let usage): [0x11, UInt8(usage & 0xFF), UInt8(usage >> 8)]
         case .setRotation(let rotation): [0x20, UInt8(rotation.rawValue)]
         case .getSettings: [0x21]
+        case .setScrollInvert(let on): [0x22, on ? 1 : 0]
+        case .switchProfile(let profile): [0x23, UInt8(profile)]
         }
     }
 }

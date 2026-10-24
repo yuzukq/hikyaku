@@ -13,7 +13,8 @@
 | [ota.md](ota.md) | OTA（BLE 経由のファーム更新）の使い方と仕組み |
 | [handoff.md](handoff.md) | 引き継ぎメモ（現状・作業のルール・やってほしいこと） |
 | [firmware.md](firmware.md) | ファームウェアの構成・ビルド・書き込み・デバッグ・落とし穴 |
-| [design/multi-host.md](design/multi-host.md) | 2 台のマシンの切り替え（検討中の設計メモ） |
+| [design/multi-host.md](design/multi-host.md) | 2 台のマシン（Mac・Windows）の切り替えと、Windows アプリの技術選定 |
+| [../win/README.md](../win/README.md) | Windows アプリ（C# / WPF）のビルドと試し方 |
 | [design/ring.md](design/ring.md) | ショートカットリング（Mac アプリ `mac/HikyakuRing`）の仕様と使い方 |
 | [reference/datasheets.md](reference/datasheets.md) | データシート等へのリンクと保管場所 |
 

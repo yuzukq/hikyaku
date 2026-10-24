@@ -3,7 +3,8 @@
 //! 見分け方:
 //! 1. 押した瞬間にスクロールを始める（長押しを待たないので、押してすぐパッドを動かせばスクロールになる）。
 //! 2. 押している間にパッドが動いたら長押し。離せばスクロールが終わるだけで、クリックは出さない。
-//! 3. 動かさずに短く（`tap_max_ms` 以内に）離したら単押しの候補。`double_gap_ms` 以内にもう一度押したらダブルタップ
+//! 3. 動かさずに `long_hold_ms`（3 秒）押し続けたら長押し（送り先の切り替え）。
+//! 4. 動かさずに短く（`tap_max_ms` 以内に）離したら単押しの候補。`double_gap_ms` 以内にもう一度押したらダブルタップ
 //!    （2 回目を押した瞬間にリング）。来なければ右クリック。**右クリックはその分（`double_gap_ms`）遅れて出る。**
 //!
 //! 押した瞬間（`ScrollStart`）に呼び出し側が別の意味に使ったときは、[`Button::ignore_press`] でその押下を捨てる
@@ -21,10 +22,12 @@ pub struct Timing {
     pub tap_max_ms: u32,
     /// 単押しを離してから、この間にもう一度押したらダブルタップ
     pub double_gap_ms: u32,
+    /// 動かさずにこれだけ押し続けたら長押し（送り先の切り替え）
+    pub long_hold_ms: u32,
 }
 
 impl Timing {
-    pub const DEFAULT: Timing = Timing { debounce_ms: 5, tap_max_ms: 200, double_gap_ms: 250 };
+    pub const DEFAULT: Timing = Timing { debounce_ms: 5, tap_max_ms: 200, double_gap_ms: 250, long_hold_ms: 3000 };
 }
 
 /// ボタンの判定の結果、ファームがすること。
@@ -38,6 +41,8 @@ pub enum Action {
     RightClick,
     /// ショートカットリングを開く / 閉じる（F23 と同じ）
     RingToggle,
+    /// パッドを動かさずに `long_hold_ms` 押し続けた（送り先の切り替え）。この押下はここで終わり、離しても何もしない
+    LongHold,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +91,13 @@ impl Button {
 
     /// ピンの状態（押している = true）を渡す。5ms ごとくらいに呼ぶ。
     pub fn update(&mut self, now: u32, pressed: bool) -> Option<Action> {
+        // 動かさずに押し続けた → 長押し
+        if let State::Held { since, moved: false } = self.state {
+            if pressed && now.wrapping_sub(since) >= self.timing.long_hold_ms {
+                self.state = State::Ignored;
+                return Some(Action::LongHold);
+            }
+        }
         // 2 回目が来ないまま時間切れ → 右クリック
         if let State::WaitSecond { released } = self.state {
             if !pressed && now.wrapping_sub(released) > self.timing.double_gap_ms {
@@ -191,6 +203,24 @@ mod tests {
         assert!(out.is_empty(), "{out:?}");
         // その後は普通に使える
         assert_eq!(b.update(700, true), Some(Action::ScrollStart));
+    }
+
+    #[test]
+    fn holding_still_for_long_is_a_long_hold() {
+        let mut b = Button::new(Timing::DEFAULT);
+        let out = run(&mut b, &[(10, true), (3500, false)], 4000);
+        assert_eq!(actions(&out), [Action::ScrollStart, Action::LongHold]);
+        assert_eq!(out[1].0, 10 + 3000);
+        assert!(!b.scrolling(), "scrolling stops at the long hold");
+    }
+
+    #[test]
+    fn holding_and_moving_is_never_a_long_hold() {
+        let mut b = Button::new(Timing::DEFAULT);
+        let mut out = run(&mut b, &[(10, true)], 50);
+        b.moved();
+        out.extend((50..5000).filter_map(|t| b.update(t, t < 4000).map(|a| (t, a))));
+        assert_eq!(actions(&out), [Action::ScrollStart, Action::ScrollEnd]);
     }
 
     #[test]

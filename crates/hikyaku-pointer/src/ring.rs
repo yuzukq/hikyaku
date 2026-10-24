@@ -90,6 +90,7 @@ fn isqrt(n: u32) -> u32 {
 /// |---|---|
 /// | 0 | 種類: 1 = 開いた、2 = 閉じた、3 = 位置、4 = 設定 |
 /// | 1 | フラグ: bit0 = 触れている（設定のときは、本体の置き方 = 時計回りに 90° を何回か） |
+/// | 2〜3 | （設定のときは）今の送り先（0 = 1 台目）、その送り先でスクロールを反転しているか |
 /// | 2〜3 | 角度（0.01° 単位、0 = 上・時計回り。リトルエンディアン） |
 /// | 4〜5 | 中心からの距離（半径 = 1000） |
 /// | 6〜7 | パッドの X（生の値。調整用） |
@@ -101,8 +102,9 @@ pub enum Event {
     Opened,
     Closed,
     Position { touching: bool, angle_cdeg: u16, radius: u16, x: u16, y: u16, z: u8 },
-    /// 今の設定（HELLO・設定の問い合わせ・変更への返事）。
-    Settings { rotation: Rotation },
+    /// 今の設定（HELLO・設定の問い合わせ・変更への返事）。profile = 今の送り先（0 = 1 台目）、
+    /// scroll_invert = その送り先でスクロールを反転しているか。
+    Settings { rotation: Rotation, profile: u8, scroll_invert: bool },
 }
 
 pub const EVENT_LEN: usize = 12;
@@ -123,14 +125,19 @@ impl Event {
                 b[8..10].copy_from_slice(&y.to_le_bytes());
                 b[10] = z;
             }
-            Event::Settings { rotation } => {
+            Event::Settings { rotation, profile, scroll_invert } => {
                 b[0] = 4;
                 b[1] = rotation.quarters();
+                b[2] = profile;
+                b[3] = scroll_invert as u8;
             }
         }
         b
     }
 }
+
+/// 送り先（プロファイル）の数。docs/design/multi-host.md
+pub const PROFILES: usize = 2;
 
 /// アプリ → hikyaku（ring.ctrl への書き込み）の 1 バイト目。
 pub mod ctrl {
@@ -150,6 +157,10 @@ pub mod ctrl {
     pub const SET_ROTATION: u8 = 0x20;
     /// 今の設定を問い合わせる。`[0x21]`。返事は設定のイベント
     pub const GET_SETTINGS: u8 = 0x21;
+    /// 今の送り先でスクロールを反転するか（フラッシュに保存）。`[0x22, 0 | 1]`。返事は設定のイベント
+    pub const SET_SCROLL_INVERT: u8 = 0x22;
+    /// 送り先（プロファイル）を切り替える。`[0x23, 0 | 1]`。hikyaku は保存して再起動し、その ID でつなぎ直す（今の接続は切れる）
+    pub const SWITCH_PROFILE: u8 = 0x23;
 }
 
 /// よく使うメディアキー（HID Consumer Page の Usage ID）。
@@ -174,6 +185,8 @@ pub enum Command {
     Consumer(u16),
     SetRotation(Rotation),
     GetSettings,
+    SetScrollInvert(bool),
+    SwitchProfile(u8),
 }
 
 impl Command {
@@ -186,6 +199,8 @@ impl Command {
             [ctrl::CONSUMER, lo, hi, ..] => Some(Command::Consumer(u16::from_le_bytes([lo, hi]))),
             [ctrl::SET_ROTATION, q, ..] => Rotation::from_quarters(q).map(Command::SetRotation),
             [ctrl::GET_SETTINGS, ..] => Some(Command::GetSettings),
+            [ctrl::SET_SCROLL_INVERT, v, ..] => Some(Command::SetScrollInvert(v != 0)),
+            [ctrl::SWITCH_PROFILE, p, ..] if (p as usize) < PROFILES => Some(Command::SwitchProfile(p)),
             _ => None,
         }
     }
@@ -264,6 +279,9 @@ mod tests {
         assert_eq!(Command::parse(&[0x20, 3]), Some(Command::SetRotation(Rotation::R270)));
         assert_eq!(Command::parse(&[0x20, 4]), None, "only 0..3");
         assert_eq!(Command::parse(&[0x21]), Some(Command::GetSettings));
+        assert_eq!(Command::parse(&[0x22, 1]), Some(Command::SetScrollInvert(true)));
+        assert_eq!(Command::parse(&[0x23, 1]), Some(Command::SwitchProfile(1)));
+        assert_eq!(Command::parse(&[0x23, 2]), None, "only 2 profiles");
     }
 
     #[test]
@@ -272,6 +290,7 @@ mod tests {
         assert_eq!(e.encode(7), [3, 1, 0x28, 0x23, 0x20, 0x03, 0x23, 0x01, 0x56, 0x04, 12, 7]);
         assert_eq!(Event::Opened.encode(0)[0], 1);
         assert_eq!(Event::Closed.encode(0)[0], 2);
-        assert_eq!(Event::Settings { rotation: Rotation::R90 }.encode(5), [4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]);
+        let e = Event::Settings { rotation: Rotation::R90, profile: 1, scroll_invert: true };
+        assert_eq!(e.encode(5), [4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 5]);
     }
 }

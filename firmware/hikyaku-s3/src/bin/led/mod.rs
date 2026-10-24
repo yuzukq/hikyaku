@@ -18,6 +18,11 @@ use esp_hal::{
 pub const RED: (u8, u8, u8) = (24, 0, 0);
 pub const GREEN: (u8, u8, u8) = (0, 24, 0);
 pub const BLUE: (u8, u8, u8) = (0, 0, 32);
+
+/// 準備ができたときの色で、今の送り先を示す: 1 台目（hikyaku）= 緑、2 台目（hikyaku2）= 青。
+pub const fn ready(profile: u8) -> (u8, u8, u8) {
+    if profile == 0 { GREEN } else { BLUE }
+}
 /// USB キーボードの状態（診断用）。
 pub const WHITE: (u8, u8, u8) = (16, 16, 16);
 pub const CYAN: (u8, u8, u8) = (0, 20, 20);
