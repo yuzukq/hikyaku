@@ -766,6 +766,17 @@ impl<'d, P: PacketPool> ConnectionManager<'d, P> {
         }
     }
 
+    /// hikyaku: この接続が暗号化済みか（2 回目以降の MTU 交換の要求の扱いを決めるため）。
+    pub(crate) fn is_encrypted_handle(&self, conn: ConnHandle) -> bool {
+        #[cfg(feature = "security")]
+        for storage in self.connections.borrow().iter() {
+            if matches!(storage.state, ConnectionState::Connecting | ConnectionState::Connected) && storage.handle == Some(conn) {
+                return storage.security_level != SecurityLevel::NoEncryption;
+            }
+        }
+        false
+    }
+
     /// hikyaku: 2 回目以降の MTU 交換の要求への応答を後回しにする（もう後回しにしていれば何もしない）。
     pub(crate) fn defer_mtu_response(&self, conn: ConnHandle) {
         for storage in self.connections.borrow_mut().iter_mut() {

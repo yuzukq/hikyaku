@@ -767,12 +767,18 @@ where
                 self.connections.att_received(acl.handle());
                 if let Ok(att::Att::Client(AttClient::Request(att::AttReq::ExchangeMtu { .. }))) = a {
                     if !self.connections.first_att_mtu_request(acl.handle()) {
-                        // hikyaku: 2 回目以降の MTU 交換の要求には、すぐには応答しない。すぐ応答すると Windows は別の要求への応答と
-                        // 取り違えて切断し、応答しないと 30 秒後に時間切れで切断した（TP-Link / Realtek のアダプタ、2026-10-24）。
-                        // 相手から ATT が来ない静かなときに応答する（Connection::send_deferred_mtu_response をアプリが定期的に呼ぶ）。
-                        warn!("[host] deferring a repeated ATT MTU exchange request");
-                        self.connections.defer_mtu_response(acl.handle());
-                        return Ok(());
+                        // hikyaku: 2 回目以降の MTU 交換の要求（Windows が TP-Link / Realtek のアダプタで同じ要求を 2 回送る。2026-10-24）。
+                        // - 暗号化済み（つなぎ直し）: すぐに普通の MTU 応答を返す（下に進む）。Windows は 1 回目の応答の直後に次の要求を
+                        //   出していないので、取り違えられない。遅らせた応答（MTU 応答もエラー応答も）は Windows に捨てられ、30 秒で切れた
+                        // - 暗号化の前（ペアリング中）: すぐ応答すると、Windows がすでに出している次の要求への応答と取り違えて切断したので、
+                        //   静かなときにエラー応答を返す（Connection::send_deferred_mtu_response をアプリが定期的に呼ぶ）
+                        if self.connections.is_encrypted_handle(acl.handle()) {
+                            info!("[host] answering the repeated ATT MTU request at once (encrypted)");
+                        } else {
+                            warn!("[host] deferring a repeated ATT MTU exchange request (not encrypted yet)");
+                            self.connections.defer_mtu_response(acl.handle());
+                            return Ok(());
+                        }
                     }
                 }
                 if let Ok(att::Att::Client(AttClient::Request(att::AttReq::ExchangeMtu { mtu }))) = a {
