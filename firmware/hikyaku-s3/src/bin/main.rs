@@ -15,7 +15,7 @@ use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{with_timeout, Duration, Timer};
 use bond_store::BondStore;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use esp_hal::clock::CpuClock;
 use esp_storage::FlashStorage;
 use esp_hal::timer::timg::TimerGroup;
@@ -473,7 +473,8 @@ async fn usb_host(usb: Usb<'static>, fast_start: bool) {
 
 /// `connections_max` は、購読（CCCD）の状態を覚えておく相手の数。既定の 1 だと、Mac が使った枠のせいで、
 /// 別の相手（OTA 用の PC や 2 台目のホスト）が通知を購読できなくなる。
-#[gatt_server(connections_max = 4)]
+/// `attribute_table_size` は、2 台目の GAP / GATT サービス（`windows_gap_table`）が既定より 1 つ多いので、余裕を持たせる。
+#[gatt_server(connections_max = 4, attribute_table_size = 64)]
 struct Server {
     hid: HidService,
     battery: BatteryService,
@@ -721,11 +722,18 @@ async fn main(spawner: Spawner) -> ! {
     let mut peripheral = stack.peripheral();
     let mut runner = stack.runner();
 
-    let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-        name,
-        appearance: &appearance::human_interface_device::KEYBOARD,
-    }))
-    .unwrap();
+    // 1 台目（Mac）は trouble-host の既定の GAP / GATT サービス（ハンドルを動かさない）。2 台目（Windows）は自前（`windows_gap_table`）。
+    let (server, service_changed) = if config.profile == 1 {
+        let mut table = AttributeTable::new();
+        let service_changed = windows_gap_table(&mut table, name);
+        (Server::new(table), Some(service_changed))
+    } else {
+        let gap = GapConfig::Peripheral(PeripheralConfig {
+            name,
+            appearance: &appearance::human_interface_device::KEYBOARD,
+        });
+        (Server::new_with_config(gap).unwrap(), None)
+    };
 
     info!(
         "handles: report_map={} kbd={}/{:?} leds={} mouse={}/{:?} consumer={}/{:?}",
@@ -763,7 +771,7 @@ async fn main(spawner: Spawner) -> ! {
             info!("connected");
             // ボンディングを許可（これが無いと PairingComplete の bond が None になり保存されない）。
             let _ = conn.raw().set_bondable(true);
-            match session(&server, &conn, &store, &flash).await {
+            match session(&server, &conn, &store, &flash, service_changed.as_ref()).await {
                 SessionEnd::Ota => request_ota_reboot(),
                 SessionEnd::Switch(p) => {
                     // ホストに押しっぱなしを残さないよう、切る前に全解放を送ってから切り替える
@@ -782,6 +790,28 @@ async fn main(spawner: Spawner) -> ! {
     loop {
         Timer::after(Duration::from_secs(1)).await;
     }
+}
+
+/// 2 台目（Windows）の GAP / GATT サービス。trouble-host の既定（`GapConfig`）との違いは 2 つ:
+/// - GATT サービス（0x1801）に Service Changed（0x2A05、indicate）を置く。既定では 0x1801 が空で、Windows は
+///   ペアリングの前に 0x1801 だけを見つけたまま、ペアリングの後にサービスを発見せず、HID の機器を作らなかった（2026-10-24。
+///   docs/design/multi-host.md）。ペアリングの後にこれで「全部変わった」と知らせ、発見をやり直させる（`session`）
+/// - GAP に Central Address Resolution を置かない（周辺機器には不要。ふつうの HID 機器にも無い）
+/// （`RawMutex` は trouble-host が使う版の embassy-sync のもの。このクレートが直接使う版とは違う）
+fn windows_gap_table<'d, M: trouble_host::__export::embassy_sync::blocking_mutex::raw::RawMutex, const MAX: usize>(
+    table: &mut AttributeTable<'d, M, MAX>,
+    name: &'d str,
+) -> Characteristic<[u8; 4]> {
+    let mut gap = table.add_service(Service::new(service::GAP));
+    gap.add_characteristic_ro(characteristic::DEVICE_NAME, name);
+    gap.add_characteristic_ro(characteristic::APPEARANCE, &appearance::human_interface_device::KEYBOARD);
+    gap.build();
+    let mut gatt = table.add_service(Service::new(service::GATT));
+    let service_changed = gatt
+        .add_characteristic_small(characteristic::SERVICE_CHANGED, [CharacteristicProp::Indicate], [0u8; 4])
+        .build();
+    gatt.build();
+    service_changed
 }
 
 async fn advertise<'v, 's, C: Controller>(
@@ -818,7 +848,28 @@ async fn session<P: PacketPool>(
     conn: &GattConnection<'_, '_, P>,
     store: &RefCell<BondStore<'_, '_>>,
     #[cfg_attr(not(feature = "trackpad"), allow(unused_variables))] flash: &RefCell<FlashStorage<'_>>,
+    service_changed: Option<&Characteristic<[u8; 4]>>,
 ) -> SessionEnd {
+    // 2 台目（Windows）: この接続でペアリングが済み、相手が Service Changed を購読したら、全体（0x0001〜0xFFFF）が
+    // 変わったと 1 回だけ知らせ、サービスの発見をやり直させる（`windows_gap_table`）。
+    let paired = Cell::new(false);
+    let service_changed_subscribed = Cell::new(false);
+    let service_changed_kick: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+    let service_changed_task = async {
+        let Some(sc) = service_changed else {
+            return core::future::pending::<()>().await;
+        };
+        loop {
+            service_changed_kick.wait().await;
+            if paired.get() && service_changed_subscribed.get() {
+                info!("service changed: asking the host to discover the services again");
+                if let Err(e) = sc.indicate(conn, &[0x01, 0x00, 0xff, 0xff], false).await {
+                    warn!("service changed: indicate failed: {:?}", e);
+                }
+                return core::future::pending::<()>().await;
+            }
+        }
+    };
     // 相手が自分から暗号化（ペアリング）を始めなければ、1.5 秒後に hikyaku から求める。つないだ瞬間に求めると、
     // Windows の「デバイスの追加」が始めるペアリングとぶつかって失敗した（2026-10-24。Mac・Linux は平気だった）。
     let security = async {
@@ -841,6 +892,8 @@ async fn session<P: PacketPool>(
                     if let Some(bond) = bond {
                         store.borrow_mut().save(bond);
                     }
+                    paired.set(true);
+                    service_changed_kick.signal(());
                 }
                 GattConnectionEvent::PairingFailed(e) => warn!("pairing failed: {:?}", e),
                 GattConnectionEvent::Gatt { event } => {
@@ -867,16 +920,28 @@ async fn session<P: PacketPool>(
                         GattEvent::Read(r) => debug!("gatt read handle={}", r.handle()),
                         _ => {}
                     }
+                    // Service Changed の CCCD（bit 1 = indicate）
+                    let service_changed_cccd = match (&event, service_changed.and_then(|sc| sc.cccd_handle)) {
+                        (GattEvent::Write(w), Some(h)) if w.handle() == h => {
+                            w.with_data(|_, d| Some(d.first().is_some_and(|b| b & 0x02 != 0)))
+                        }
+                        _ => None,
+                    };
                     match event.accept() {
                         Ok(reply) => reply.send().await,
                         Err(e) => warn!("gatt error: {:?}", e),
+                    }
+                    if let Some(on) = service_changed_cccd {
+                        info!("service changed: subscribed={}", on);
+                        service_changed_subscribed.set(on);
+                        service_changed_kick.signal(());
                     }
                 }
                 _ => {}
             }
         }
     };
-    let events = select(events_loop, security);
+    let events = select3(events_loop, security, service_changed_task);
     // 接続前に溜まったレポートは捨てる（古い押下が残って暴走しないように）。
     REPORTS.clear();
     let forward = async {

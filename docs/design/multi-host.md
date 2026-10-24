@@ -49,7 +49,36 @@
 
 - **Device Information サービス（PnP ID）** を GATT の末尾に足した。HID over GATT の仕様で必須で、Windows はこれが無いとつながらないことがある。
   末尾なので既存のハンドルは動かず、Mac の再ペアリングは要らない。
+- **2 台目だけ、GAP / GATT サービスを自前にした**（`windows_gap_table`。1 台目＝Mac は今までどおりで、ハンドルも動かない）。
+  GATT サービス（0x1801）に Service Changed（0x2A05）を置き、ペアリングが済んで Windows が購読したら、全体（0x0001〜0xFFFF）が
+  変わったと 1 回知らせる。GAP の Central Address Resolution も外した（周辺機器には不要）。下の「Windows で HID にならなかった件」
 - 画面の明るさのメディアキー（Consumer 0x6F / 0x70）は Windows ではほとんど効かない。Windows アプリが WMI（内蔵画面）・DDC/CI（外部モニタ）で変える。
+
+## Windows で HID にならなかった件（2026-10-24 に Windows で調べた）
+
+症状: ペアリングでき「接続済み」になるが、キーもカーソルも動かない。
+
+Windows 側で分かったこと（Windows 11 26200、アダプタは BARROT Bluetooth 6.0 Adapter。この PC で初めての BLE 機器）:
+
+- ペアリングは成功している（Just Works・LE Secure Connections・鍵は IdKey だけ。Windows の記録でも `PairingResult` は 0）
+- ところが Windows が作ったサービスの子は **0x1801（GATT サービス）だけ**（`BTHLEDevice\{00001801-...}_ffe4051a8ffe\...&0008`）。
+  HID・電池・DIS の子は一度も作られない。ドライバの失敗ではない（setupapi.dev.log に失敗なし）
+- BTHLE のノードのデバイスインターフェースが有効にならない（`{781aee18-...}` が Linked でない）。だから WinRT の
+  `BluetoothLEDevice.FromIdAsync` / `FromBluetoothAddressAsync` が FileNotFoundException になる
+- ETW（Microsoft の BluetoothStack.wprp）の HCI の記録では、ATT は「MTU 交換 → 0x1801 を Find By Type Value で探す
+  （ハンドル 8〜8、中身なし）→ 続きを探す（Attribute Not Found）」だけ。そのあとペアリング・暗号化・鍵の配布まで進み、
+  **暗号化の後は 20 秒間 ATT の要求が一つも出ない**（サービスの全体の発見をしない）。再接続でもしない
+- Windows はペアリングの前に 0x1801 の中の Service Changed を探しに来ている。trouble-host の既定の 0x1801 は空
+
+直し方（試す順）:
+
+1. ファーム: 2 台目に Service Changed を置き、ペアリングの後に indication で発見をやり直させる（上の「Windows のための変更」）。
+   **Windows で hikyaku2 を一度削除してから**ペアリングし直す（古い、0x1801 だけの情報を捨てるため）。
+   hikyaku のログに `service changed: subscribed=true` → `asking the host to discover the services again` が出て、
+   そのあと `gatt read handle=...`（Windows がレポートマップなどを読む）が続けば成功
+2. 1 で直らなければ、アダプタの問題を疑う。接続の直後に Windows が出した LE Read Remote Features を、アダプタが
+   Controller Busy（0x3A）で断っている（アダプタが自分で Data Length の更新を始めたのとぶつかった）。別の Bluetooth アダプタ
+   （Intel・Realtek など）で試すか、ほかの BLE 機器（BlueZ の周辺機器など）が同じアダプタで動くかを確かめる
 
 ## Windows アプリの技術選定: C# (.NET 8) + WPF
 
