@@ -18,6 +18,25 @@ using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Devices.Enumeration;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
+try
+{
+    return await Probe();
+}
+catch (Exception e)
+{
+    Console.WriteLine($"例外: {e}");
+    return 1;
+}
+finally
+{
+    // ダブルクリックで開いたとき、結果を読めるように閉じずに待つ
+    Console.WriteLine();
+    Console.WriteLine("Enter で閉じます");
+    Console.ReadLine();
+}
+
+async Task<int> Probe()
+{
 
 // 1. ペアリング済みの機器のうち、ring サービスを持つもの（これが取れるかが最大の確認点）
 var selector = GattDeviceService.GetDeviceSelectorFromUuid(RingUuid.Service);
@@ -41,7 +60,33 @@ if (service is null)
         Console.WriteLine("hikyaku が見つからない。Windows の設定 → Bluetooth で hikyaku2 とペアリングしているか確認する");
         return 1;
     }
-    var device = await BluetoothLEDevice.FromIdAsync(info.Id);
+    Console.WriteLine($"ID: {info.Id}");
+    Console.WriteLine($"有効: {info.IsEnabled}、ペアリング: {info.Pairing.IsPaired}");
+    foreach (var (k, v) in info.Properties) Console.WriteLine($"  {k} = {v}");
+    BluetoothLEDevice? device = null;
+    try
+    {
+        device = await BluetoothLEDevice.FromIdAsync(info.Id);
+    }
+    catch (Exception e)
+    {
+        Console.WriteLine($"ID から開けない: {e.GetType().Name}: {e.Message}");
+    }
+    // ID で開けなければ、アドレスから（1 台目 hikyaku = FF:E4:05:1A:8F:FF、2 台目 hikyaku2 = FF:E4:05:1A:8F:FE）
+    foreach (var address in new ulong[] { 0xFFE4051A8FFE, 0xFFE4051A8FFF })
+    {
+        if (device is not null) break;
+        try
+        {
+            device = await BluetoothLEDevice.FromBluetoothAddressAsync(address, BluetoothAddressType.Random);
+            Console.WriteLine($"アドレス {address:X12} から: {(device is null ? "見つからない" : "開いた")}");
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"アドレス {address:X12} から開けない: {e.GetType().Name}: {e.Message}");
+        }
+    }
+    if (device is null) return 1;
     Console.WriteLine($"{device.Name}（{device.BluetoothAddress:X12}）: 接続 {device.ConnectionStatus}");
     var all = await device.GetGattServicesAsync(BluetoothCacheMode.Uncached);
     Console.WriteLine($"GATT サービス（{all.Status}）: {string.Join(", ", all.Services.Select(s => s.Uuid.ToString()[..8]))}");
@@ -127,3 +172,4 @@ while (Console.ReadLine() is { } line)
     }
 }
 return 0;
+}

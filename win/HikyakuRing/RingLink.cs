@@ -178,17 +178,50 @@ public sealed class RingLink : IDisposable
         var found = await DeviceInformation.FindAllAsync(GattDeviceService.GetDeviceSelectorFromUuid(RingUuid.Service));
         foreach (var info in found)
         {
-            var s = await GattDeviceService.FromIdAsync(info.Id);
-            if (s?.Device?.ConnectionStatus == BluetoothConnectionStatus.Connected) return s;
-            s?.Dispose();
+            try
+            {
+                var s = await GattDeviceService.FromIdAsync(info.Id);
+                if (s?.Device?.ConnectionStatus == BluetoothConnectionStatus.Connected) return s;
+                s?.Dispose();
+            }
+            catch (Exception e)
+            {
+                Log.Error($"open service: {e.GetType().Name}: {e.Message}");
+            }
         }
         var paired = await DeviceInformation.FindAllAsync(BluetoothLEDevice.GetDeviceSelectorFromPairingState(true));
         foreach (var info in paired.Where(d => d.Name.StartsWith("hikyaku", StringComparison.OrdinalIgnoreCase)))
         {
-            using var device = await BluetoothLEDevice.FromIdAsync(info.Id);
-            if (device?.ConnectionStatus != BluetoothConnectionStatus.Connected) continue;
+            if (await OpenRingAsync(() => BluetoothLEDevice.FromIdAsync(info.Id).AsTask()) is { } s) return s;
+        }
+        // ID で開けないことがある（FileNotFoundException）。アドレスからも試す（hikyaku2 = FF:E4:05:1A:8F:FE、hikyaku = …:FF）
+        foreach (var address in ProfileAddresses)
+        {
+            if (await OpenRingAsync(() => BluetoothLEDevice.FromBluetoothAddressAsync(address, BluetoothAddressType.Random).AsTask()) is { } s) return s;
+        }
+        return null;
+    }
+
+    private static readonly ulong[] ProfileAddresses = [0xFFE4051A8FFE, 0xFFE4051A8FFF];
+
+    private static async Task<GattDeviceService?> OpenRingAsync(Func<Task<BluetoothLEDevice?>> open)
+    {
+        try
+        {
+            var device = await open();
+            if (device?.ConnectionStatus != BluetoothConnectionStatus.Connected)
+            {
+                device?.Dispose();
+                return null;
+            }
             var r = await device.GetGattServicesForUuidAsync(RingUuid.Service, BluetoothCacheMode.Uncached);
             if (r.Status == GattCommunicationStatus.Success && r.Services.Count > 0) return r.Services[0];
+            Log.Error($"ring service on {device.Name}: {r.Status}, {r.Services.Count} found");
+            device.Dispose();
+        }
+        catch (Exception e)
+        {
+            Log.Error($"open device: {e.GetType().Name}: {e.Message}");
         }
         return null;
     }
