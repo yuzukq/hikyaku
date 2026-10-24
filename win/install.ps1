@@ -41,4 +41,5 @@ $link.Save()
 
 $version = (Get-Item $exe).VersionInfo.ProductVersion
 Write-Host "入れました: $exe（版 $version）"
-Start-Process $exe
+# 作業フォルダを入れた場所にする（指定しないと展開したフォルダが作業フォルダのままになり、そのフォルダを消せなくなる）
+Start-Process -FilePath $exe -WorkingDirectory $dest
