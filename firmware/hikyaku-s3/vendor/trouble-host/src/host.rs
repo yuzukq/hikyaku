@@ -763,10 +763,15 @@ where
                 // Handle ATT MTU exchange here since it doesn't strictly require
                 // gatt to be enabled.
                 let a = att::Att::decode(pdu.as_ref());
+                // hikyaku: 相手から ATT を受けた時刻（後回しにした MTU の応答を、静かなときに送るため）
+                self.connections.att_received(acl.handle());
                 if let Ok(att::Att::Client(AttClient::Request(att::AttReq::ExchangeMtu { .. }))) = a {
                     if !self.connections.first_att_mtu_request(acl.handle()) {
-                        // hikyaku: 2 回目以降の MTU 交換の要求には応答しない（connection_manager の first_att_mtu_request）
-                        warn!("[host] ignoring a repeated ATT MTU exchange request");
+                        // hikyaku: 2 回目以降の MTU 交換の要求には、すぐには応答しない。すぐ応答すると Windows は別の要求への応答と
+                        // 取り違えて切断し、応答しないと 30 秒後に時間切れで切断した（TP-Link / Realtek のアダプタ、2026-10-24）。
+                        // 相手から ATT が来ない静かなときに応答する（Connection::send_deferred_mtu_response をアプリが定期的に呼ぶ）。
+                        warn!("[host] deferring a repeated ATT MTU exchange request");
+                        self.connections.defer_mtu_response(acl.handle());
                         return Ok(());
                     }
                 }

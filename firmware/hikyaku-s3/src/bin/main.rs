@@ -965,7 +965,15 @@ async fn session(
             }
         }
     };
-    let events = select3(events_loop, security, service_changed_task);
+    // 後回しにした ATT MTU 交換の応答（Windows が同じ要求を 2 回送る件。vendor/README.md）を、相手から ATT が 500 ms 来ていない
+    // 静かなとき（遅くとも 20 秒後。Windows の時間切れは 30 秒）に送る。
+    let deferred_mtu = async {
+        loop {
+            Timer::after(Duration::from_millis(100)).await;
+            conn.raw().send_deferred_mtu_response(Duration::from_millis(500), Duration::from_secs(20));
+        }
+    };
+    let events = select4(events_loop, security, service_changed_task, deferred_mtu);
     // 接続前に溜まったレポートは捨てる（古い押下が残って暴走しないように）。
     REPORTS.clear();
     let forward = async {

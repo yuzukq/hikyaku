@@ -520,6 +520,8 @@ impl<'d, P: PacketPool> ConnectionManager<'d, P> {
                 storage.att_mtu = 23;
                 storage.att_mtu_exchanged = false;
                 storage.own_mtu_request_pending = false;
+                storage.mtu_response_deferred_at = None;
+                storage.last_att_received = embassy_time::Instant::now();
                 storage.handle.replace(handle);
                 #[cfg(feature = "security")]
                 let identity = self
@@ -752,6 +754,83 @@ impl<'d, P: PacketPool> ConnectionManager<'d, P> {
             }
         }
         false
+    }
+
+    /// hikyaku: 相手から ATT の PDU を受けた（`last_att_received` を更新する）。
+    pub(crate) fn att_received(&self, conn: ConnHandle) {
+        for storage in self.connections.borrow_mut().iter_mut() {
+            if matches!(storage.state, ConnectionState::Connecting | ConnectionState::Connected) && storage.handle == Some(conn) {
+                storage.last_att_received = embassy_time::Instant::now();
+                return;
+            }
+        }
+    }
+
+    /// hikyaku: 2 回目以降の MTU 交換の要求への応答を後回しにする（もう後回しにしていれば何もしない）。
+    pub(crate) fn defer_mtu_response(&self, conn: ConnHandle) {
+        for storage in self.connections.borrow_mut().iter_mut() {
+            if matches!(storage.state, ConnectionState::Connecting | ConnectionState::Connected) && storage.handle == Some(conn) {
+                storage.mtu_response_deferred_at.get_or_insert(embassy_time::Instant::now());
+                return;
+            }
+        }
+    }
+
+    /// hikyaku: 後回しにした MTU の応答を、いま送ってよければ（相手から `idle` の間 ATT が来ていない、または後回しにしてから
+    /// `max_wait` たった）取り下げて、応答に入れる MTU を返す。
+    pub(crate) fn take_deferred_mtu_response(
+        &self,
+        index: u8,
+        idle: embassy_time::Duration,
+        max_wait: embassy_time::Duration,
+    ) -> Option<(ConnHandle, u16)> {
+        let mut connections = self.connections.borrow_mut();
+        let storage = &mut connections[index as usize];
+        let since = storage.mtu_response_deferred_at?;
+        let now = embassy_time::Instant::now();
+        if now.saturating_duration_since(storage.last_att_received) >= idle || now.saturating_duration_since(since) >= max_wait {
+            storage.mtu_response_deferred_at = None;
+            Some((storage.handle?, storage.att_mtu))
+        } else {
+            None
+        }
+    }
+
+    /// hikyaku: 後回しにした MTU の応答を送る（`Connection::send_deferred_mtu_response`）。
+    pub(crate) fn send_deferred_mtu_response(
+        &self,
+        index: u8,
+        idle: embassy_time::Duration,
+        max_wait: embassy_time::Duration,
+    ) -> bool {
+        let Some((handle, mtu)) = self.take_deferred_mtu_response(index, idle, max_wait) else {
+            return false;
+        };
+        let Some(mut buf) = P::allocate() else {
+            warn!("[host] no buffer for the deferred ATT MTU response");
+            return false;
+        };
+        let mut w = crate::cursor::WriteCursor::new(buf.as_mut());
+        let written = w
+            .write_hci(&crate::types::l2cap::L2capHeader {
+                channel: crate::types::l2cap::L2CAP_CID_ATT,
+                length: 3,
+            })
+            .and_then(|_| w.write(crate::att::Att::Server(crate::att::AttServer::Response(crate::att::AttRsp::ExchangeMtu { mtu }))));
+        if written.is_err() {
+            return false;
+        }
+        let len = w.len();
+        match self.try_outbound(handle, Pdu::new(buf, len)) {
+            Ok(()) => {
+                info!("[host] sent the deferred ATT MTU response ({})", mtu);
+                true
+            }
+            Err(e) => {
+                warn!("[host] sending the deferred ATT MTU response failed: {:?}", e);
+                false
+            }
+        }
     }
 
     pub(crate) fn exchange_att_mtu(&self, conn: ConnHandle, mtu: u16) -> u16 {
@@ -1179,6 +1258,10 @@ pub struct ConnectionStorage<P> {
     pub att_mtu_exchanged: bool,
     /// hikyaku: こちら（周辺機器）から送った ATT MTU 交換の要求の応答を待っている（応答は GATT クライアントに渡さない）
     pub own_mtu_request_pending: bool,
+    /// hikyaku: 相手からの 2 回目以降の MTU 交換の要求への応答を後回しにした時刻（`take_deferred_mtu_response`）
+    pub mtu_response_deferred_at: Option<embassy_time::Instant>,
+    /// hikyaku: 相手から最後に ATT の PDU を受けた時刻
+    pub last_att_received: embassy_time::Instant,
     pub link_credits: usize,
     pub link_credit_waker: WakerRegistration,
     pub refcount: u8,
@@ -1292,6 +1375,8 @@ impl<P> ConnectionStorage<P> {
             att_mtu: 23,
             att_mtu_exchanged: false,
             own_mtu_request_pending: false,
+            mtu_response_deferred_at: None,
+            last_att_received: embassy_time::Instant::MIN,
             link_credits: 0,
             link_credit_waker: WakerRegistration::new(),
             refcount: 0,
