@@ -80,7 +80,11 @@ Windows 側で分かったこと（Windows 11 26200、アダプタは BARROT Blu
    （Find By Type Value → Read By Type → Find Information → CCCD の書き込み）を繰り返すだけで、Read By Group Type を一度も出さない。
    hikyaku の応答はすべて規格どおり（ETW と hikyaku の ATT のログが 1 対 1 で一致）。Windows が 0x1801 の子を作ったのは
    indication より前で、そのとき Windows が知っていたのは 0x1801 だけ。Service Changed は規格どおりで害はないので、そのまま残す
-2. 1 で直らなければ、アダプタの問題を疑う。接続の直後に Windows が出した LE Read Remote Features を、アダプタが
+2. **原因はアダプタだった（22:01 に確認）。** Linux の BlueZ で出した試験用の機器（hktest。BlueZ の既定の GATT に電池 0x180F を
+   足しただけ）でも同じだった: 子は 0x1801 だけ、Read Remote Features は Controller Busy、Windows は Read By Group Type を出さない。
+   アダプタは Barrot のドライバ（11.8.41.844、2025-02-12、oem90.inf）。ファームでは直せないので、別のアダプタ（Intel・Realtek など）
+   を使うか、Barrot のドライバを更新する。以下はそのときの見立て:
+   アダプタの問題を疑う。接続の直後に Windows が出した LE Read Remote Features を、アダプタが
    Controller Busy（0x3A）で断っている（アダプタが自分で Data Length の更新を始めたのとぶつかった）。別の Bluetooth アダプタ
    （Intel・Realtek など）で試すか、ほかの BLE 機器（BlueZ の周辺機器など）が同じアダプタで動くかを確かめる
 
