@@ -23,7 +23,7 @@ tools/scripts/       検証用スクリプト（ble_rx.py, uart_cap.py）
   IF0（ブートキーボード）を自前の `open_keyboard` で、IF2（マウス・コンシューマ）を `open_media_pipe` で開き、`REPORTS` チャネルへ流す。切断時は全解放レポートを送る。
   どちらも認識（`enumerate`）のときに読んだ構成記述子を使い、読み直さない（ライブラリの `KbdHandler` は読み直すところで TOFU60 が止まった）。
   バスリセット（つないだときも）の後は 100ms 待ってから問い合わせ、認識・制御転送には時間切れを付ける。認識に失敗したら、
-  挿し直しを待たずにバスリセットで 3 回までやり直す（`USB_RETRIES` など。TOFU60 で確認。7sPro はこの版では未確認）。
+  挿し直しを待たずにバスリセットで 3 回までやり直す（`USB_RETRIES` など。TOFU60・7sPro で確認、2026-10-24）。
 - **BLE HID:** trouble の GATT サーバ。HID サービス（固定レポート記述子 149 バイト: キーボード ID1 / マウス ID2 / コンシューマ ID3）とバッテリーサービス。
   アドレスは固定のランダム静的アドレス `FF:E4:05:1A:8F:FF`。名前は `hikyaku`。IO 能力は NoInputNoOutput（JustWorks）。
 - **ボンディング保存（`src/bin/bond_store/`）:** `conn.set_bondable(true)` した上で、`PairingComplete` の鍵をフラッシュの 0x9000（`nvs` 領域, 4KB）に保存。最大 4 台、起動時に復元。
