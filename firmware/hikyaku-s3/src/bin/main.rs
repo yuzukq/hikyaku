@@ -872,7 +872,12 @@ async fn session<P: PacketPool>(
     };
     // 相手が自分から暗号化（ペアリング）を始めなければ、1.5 秒後に hikyaku から求める。つないだ瞬間に求めると、
     // Windows の「デバイスの追加」が始めるペアリングとぶつかって失敗した（2026-10-24。Mac・Linux は平気だった）。
+    // 2 台目（Windows）では求めない: Windows は必ず自分からペアリングを始め、ペアリングの途中はまだ「暗号化なし」に
+    // 見えるので、1.5 秒後の要求がペアリングに割り込んでいた（2026-10-24）。
     let security = async {
+        if service_changed.is_some() {
+            return core::future::pending::<()>().await;
+        }
         Timer::after(Duration::from_millis(1500)).await;
         if matches!(conn.raw().security_level(), Ok(SecurityLevel::NoEncryption)) {
             info!("not encrypted yet, requesting security");
