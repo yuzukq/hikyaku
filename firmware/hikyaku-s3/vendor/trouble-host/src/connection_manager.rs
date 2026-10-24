@@ -810,21 +810,21 @@ impl<'d, P: PacketPool> ConnectionManager<'d, P> {
             warn!("[host] no buffer for the deferred ATT MTU response");
             return false;
         };
+        // MTU の応答ではなくエラー応答（Request Not Supported）。Windows は MTU が決まった後の MTU の応答を捨てるので、
+        // それでは 2 回目の要求が終わらず 30 秒で切断した。エラー応答なら、その要求は終わりとして扱われる（2026-10-24）。
+        let rsp = crate::att::Att::Server(crate::att::AttServer::Response(crate::att::AttRsp::Error {
+            request: crate::att::ATT_EXCHANGE_MTU_REQ,
+            handle: 0,
+            code: crate::att::AttErrorCode::REQUEST_NOT_SUPPORTED,
+        }));
         let mut w = crate::cursor::WriteCursor::new(buf.as_mut());
         let written = w
             .write_hci(&crate::types::l2cap::L2capHeader {
                 channel: crate::types::l2cap::L2CAP_CID_ATT,
-                length: 3,
+                // L2CAP の長さは ATT の PDU の長さ（エラー応答は 5 バイト）
+                length: crate::codec::Type::size(&rsp) as u16,
             })
-            .and_then(|_| {
-                // MTU の応答ではなくエラー応答（Request Not Supported）。Windows は MTU が決まった後の MTU の応答を捨てるので、
-                // それでは 2 回目の要求が終わらず 30 秒で切断した。エラー応答なら、その要求は終わりとして扱われる（2026-10-24）。
-                w.write(crate::att::Att::Server(crate::att::AttServer::Response(crate::att::AttRsp::Error {
-                    request: crate::att::ATT_EXCHANGE_MTU_REQ,
-                    handle: 0,
-                    code: crate::att::AttErrorCode::REQUEST_NOT_SUPPORTED,
-                })))
-            });
+            .and_then(|_| w.write(rsp));
         if written.is_err() {
             return false;
         }
