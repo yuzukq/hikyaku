@@ -106,3 +106,7 @@ lto           = 'fat'
 opt-level     = 's'
 
 [workspace]
+
+# Windows（TP-Link のアダプタ）とつなぐための修正を入れた trouble-host（vendor/README.md）
+[patch.crates-io]
+trouble-host = { path = "vendor/trouble-host" }
