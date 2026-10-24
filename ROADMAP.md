@@ -94,10 +94,11 @@
 - [x] ファーム: 送り先 2 つ（アドレス・名前・ペア情報を分ける）、F21 / F22・ボタンの 3 秒長押し・アプリの命令 `23 p` で切り替え（保存して再起動）、
   送り先ごとのスクロールの向き（`22 v`）、Device Information サービス（PnP ID）、LED の色で送り先（緑 / 青）。Mac・Linux で切り替えと再接続を確認（2026-10-24）
 - [x] GitHub Actions で Windows アプリをビルドし、Release「windows-latest」に置く
-- [ ] Windows でペアリングして、キー・マウス・スクロールが動くか。**持ち主の Windows PC の BARROT Bluetooth 6.0 アダプタでは動かない**（2026-10-24）:
-  ペアリングはできるが、Windows がサービス全体を発見しない。BlueZ で出した試験用の BLE 機器でも同じなので、アダプタ（またはそのドライバ）の問題。
-  別のアダプタ（Intel・Realtek など）か、ドライバの更新で試す（docs/design/multi-host.md）
-- [ ] Windows: HID として接続中の hikyaku の独自サービスを開けるか（`win/RingProbe`）
+- [x] Windows でペアリングして、キー・マウス・スクロールが動く（2026-10-24。Dell のラップトップの内蔵 Bluetooth、TP-Link のアダプタのデスクトップ）。
+  BARROT のアダプタは Windows がサービス全体を発見しないので使えない。TP-Link のアダプタでは、Windows が MTU の交換を 2 回要求して
+  ペアリング・接続が切れたので、trouble-host をリポジトリに置いて対処（`firmware/hikyaku-s3/vendor`）。30 秒ごとの切断は Windows の再起動で消えた。
+  ボンドごとの購読（CCCD）をフラッシュに保存（再起動・切り替えの後も、Windows に再ペアリングなしでキーが届く）
+- [x] Windows: HID として接続中の hikyaku の独自サービスを開ける（`win/RingProbe`・HikyakuRing の接続を確認。2026-10-24）
 - [ ] Windows アプリ（C# / WPF、`win/HikyakuRing`）: リング・ノブ・設定画面・アクション
 - [ ] Mac アプリ: 送り先の切り替え・スクロールの向きの設定
 
