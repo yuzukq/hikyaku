@@ -843,9 +843,9 @@ async fn advertise<'v, 's, C: Controller>(
 }
 
 /// 接続中の処理。GATT イベントを捌きつつ、USB キーボードのレポートを BLE へ流す。
-async fn session<P: PacketPool>(
+async fn session(
     server: &Server<'_>,
-    conn: &GattConnection<'_, '_, P>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
     store: &RefCell<BondStore<'_, '_>>,
     #[cfg_attr(not(feature = "trackpad"), allow(unused_variables))] flash: &RefCell<FlashStorage<'_>>,
     service_changed: Option<&Characteristic<[u8; 4]>>,
@@ -885,6 +885,18 @@ async fn session<P: PacketPool>(
         }
         core::future::pending::<()>().await
     };
+    // ボンド済みの相手の購読の状態（CCCD）を、再起動後の最初の接続で戻す。つなぎ直しても CCCD を書き直さない相手
+    // （Windows）でも、再起動の後に通知が届くように（bond_store）。
+    let peer = conn.raw().peer_identity();
+    if let Some(bytes) = store.borrow_mut().cccd_to_restore(&peer) {
+        match ClientAttTableView::try_from_raw(&bytes) {
+            Ok(view) => {
+                server.set_client_att_table(conn.raw(), &view);
+                info!("restored subscriptions ({} bytes)", bytes.len());
+            }
+            Err(_) => warn!("saved subscriptions are invalid, ignoring"),
+        }
+    }
     let events_loop = async {
         loop {
             match conn.next().await {
@@ -932,9 +944,16 @@ async fn session<P: PacketPool>(
                         }
                         _ => None,
                     };
+                    let is_write = matches!(&event, GattEvent::Write(_));
                     match event.accept() {
                         Ok(reply) => reply.send().await,
                         Err(e) => warn!("gatt error: {:?}", e),
+                    }
+                    // 購読の状態が変わったら保存する（変わっていなければ書かない）
+                    if is_write {
+                        if let Some(table) = server.get_client_att_table(conn.raw()) {
+                            store.borrow_mut().save_cccd(&conn.raw().peer_identity(), table.raw());
+                        }
                     }
                     if let Some(on) = service_changed_cccd {
                         info!("service changed: subscribed={}", on);
