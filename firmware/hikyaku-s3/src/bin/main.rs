@@ -53,6 +53,8 @@ const L2CAP_CHANNELS_MAX: usize = 3;
 /// Mac は hikyaku、Windows は hikyaku2 だけを覚え、別の送り先で待っている間につなぎに来ない。
 /// 1 台目は 2026-10 までと同じアドレス（Mac の再ペアリングが要らない）。ランダムの静的アドレスなので、最上位バイトの上 2 ビットは 1。
 const PROFILE_NAMES: [&str; settings::PROFILES as usize] = ["hikyaku", "hikyaku2"];
+/// 2 台目の IRK（ペアリングで相手に渡す。RPA は使わないので、固定の値でよい）。
+const PROFILE2_IRK: u128 = 0x6869_6b79_616b_7532_5f69_726b_5f76_3031;
 const PROFILE_ADDRESSES: [[u8; 6]; settings::PROFILES as usize] =
     [[0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff], [0xfe, 0x8f, 0x1a, 0x05, 0xe4, 0xff]];
 
@@ -694,10 +696,21 @@ async fn main(spawner: Spawner) -> ! {
     // トラックパッドなしの版: 送り先の色をすぐ出す（ありの版はキャリブレーションの後に trackpad が出す）
     #[cfg(not(feature = "trackpad"))]
     led::set(led::ready(config.profile));
-    let stack = trouble_host::new(controller, &mut resources)
+    let mut builder = trouble_host::new(controller, &mut resources)
         .set_random_address(address)
-        .set_io_capabilities(IoCapabilities::NoInputNoOutput)
-        .build();
+        .set_io_capabilities(IoCapabilities::NoInputNoOutput);
+    // 2 台目（Windows）: ペアリングで渡す IRK を、全部ゼロではない固定の値にする。trouble-host は IRK が無いと
+    // ゼロの IRK を渡し、Windows はペアリングの後の準備（GATT を読んで HID の機器を作る）をしなかった（2026-10-24）。
+    // IRK を持つとアドレスが RPA になるので、広告は固定のランダムアドレスのまま（`advertise_params`）。
+    // 1 台目（Mac）は今までどおり（ペア情報を作り直さないため）。
+    if config.profile == 1 {
+        builder = builder.enable_privacy(IdentityResolvingKey::new(PROFILE2_IRK).unwrap());
+    }
+    let stack = builder.build();
+    let advertise_params = AdvertisementParameters {
+        own_addr_kind: (config.profile == 1).then_some(AddrKind::RANDOM),
+        ..Default::default()
+    };
     // 今の送り先の、保存済みのペア情報を復元する（ホスト側で削除しない限り、再起動後も再ペアリング不要）。
     let store = RefCell::new(BondStore::load(&flash, config.profile));
     for bond in store.borrow().bonds() {
@@ -715,7 +728,8 @@ async fn main(spawner: Spawner) -> ! {
     .unwrap();
 
     info!(
-        "handles: kbd={}/{:?} leds={} mouse={}/{:?} consumer={}/{:?}",
+        "handles: report_map={} kbd={}/{:?} leds={} mouse={}/{:?} consumer={}/{:?}",
+        server.hid.report_map.handle,
         server.hid.keyboard_in.handle,
         server.hid.keyboard_in.cccd_handle,
         server.hid.keyboard_leds.handle,
@@ -731,7 +745,7 @@ async fn main(spawner: Spawner) -> ! {
         }
         loop {
             let conn = match select3(
-                advertise(&mut peripheral, &server, name, &Default::default()),
+                advertise(&mut peripheral, &server, name, &advertise_params),
                 OTA_REQUEST.wait(),
                 PROFILE_SWITCH.wait(),
             )
@@ -881,7 +895,7 @@ async fn session<P: PacketPool>(
         }
         loop {
             let r = REPORTS.receive().await;
-            debug!("forward report");
+            log::trace!("forward report");
             let res = match r {
                 Report::Key(v) => server.hid.keyboard_in.notify(conn, &v, false).await,
                 Report::Mouse(v) => server.hid.mouse_in.notify(conn, &v, false).await,
