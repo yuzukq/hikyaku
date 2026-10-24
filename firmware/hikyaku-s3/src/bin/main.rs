@@ -749,7 +749,6 @@ async fn main(spawner: Spawner) -> ! {
             info!("connected");
             // ボンディングを許可（これが無いと PairingComplete の bond が None になり保存されない）。
             let _ = conn.raw().set_bondable(true);
-            let _ = conn.raw().request_security();
             match session(&server, &conn, &store, &flash).await {
                 SessionEnd::Ota => request_ota_reboot(),
                 SessionEnd::Switch(p) => {
@@ -806,7 +805,17 @@ async fn session<P: PacketPool>(
     store: &RefCell<BondStore<'_, '_>>,
     #[cfg_attr(not(feature = "trackpad"), allow(unused_variables))] flash: &RefCell<FlashStorage<'_>>,
 ) -> SessionEnd {
-    let events = async {
+    // 相手が自分から暗号化（ペアリング）を始めなければ、1.5 秒後に hikyaku から求める。つないだ瞬間に求めると、
+    // Windows の「デバイスの追加」が始めるペアリングとぶつかって失敗した（2026-10-24。Mac・Linux は平気だった）。
+    let security = async {
+        Timer::after(Duration::from_millis(1500)).await;
+        if matches!(conn.raw().security_level(), Ok(SecurityLevel::NoEncryption)) {
+            info!("not encrypted yet, requesting security");
+            let _ = conn.raw().request_security();
+        }
+        core::future::pending::<()>().await
+    };
+    let events_loop = async {
         loop {
             match conn.next().await {
                 GattConnectionEvent::Disconnected { reason } => {
@@ -853,6 +862,7 @@ async fn session<P: PacketPool>(
             }
         }
     };
+    let events = select(events_loop, security);
     // 接続前に溜まったレポートは捨てる（古い押下が残って暴走しないように）。
     REPORTS.clear();
     let forward = async {
