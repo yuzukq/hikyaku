@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 通信の形式・リングの判定・設定・キーの対応。Windows に依存しないので Linux でもテストできる。Mac 版: mac/HikyakuRing/Sources/RingCore -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Hikyaku.RingCore</RootNamespace>
+  </PropertyGroup>
+</Project>

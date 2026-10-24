@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """ショートカットリングの確認用クライアント（PC の BLE で hikyaku の独自サービス ring を受け取って表示する）。
 
-使い方: tools/ring/ring.sh [--addr FF:E4:05:1A:8F:FF]
+使い方: tools/ring/ring.sh [--addr FF:E4:05:1A:8F:FF]（2 台目の hikyaku2 は --addr FF:E4:05:1A:8F:FE）
   o: リングを開く（F23 と同じ）  c: 閉じる  r: 生の値の最小・最大をリセット  q: 終了
   + / -: 音量（hikyaku からメディアキーを送る）
   0 / 1 / 2 / 3: 本体の置き方（時計回りに 0° / 90° / 180° / 270°。hikyaku に保存される）
+  i: 今の送り先でスクロールの反転を切り替える  p: もう一方の送り先へ切り替える（hikyaku が再起動して、この接続は切れる）
 
 hikyaku は 1 台としか接続しないので、Mac の Bluetooth を切ってから使う（hikyaku が広告を始める）。
 初回はこの PC と hikyaku をペアリングする（以降は保存された鍵でつながる）。
@@ -45,6 +46,8 @@ class View:
         self.message = ""
         self.last_sector = None
         self.rotation = None
+        self.profile = None
+        self.scroll_invert = None
 
     def on_event(self, b: bytes):
         kind, flags, angle, radius, x, y, z, seq = struct.unpack("<BBHHHHBB", b[:12])
@@ -60,7 +63,8 @@ class View:
             self.message = "閉じた"
         elif kind == 4:
             self.rotation = flags * 90
-            self.message = f"設定: 本体の置き方 {self.rotation}°"
+            self.profile, self.scroll_invert = b[2], bool(b[3])
+            self.message = f"設定: 本体の置き方 {self.rotation}°、送り先 {self.profile + 1}、スクロール反転 {self.scroll_invert}"
         elif kind == 3:
             self.count += 1
             was = self.touching
@@ -107,7 +111,7 @@ class View:
             grid[gy][gx] = "+"
         grid[cy][cx] = "x" if not self.touching else grid[cy][cx]
         rate = self.count / max(time.time() - self.t0, 1e-3)
-        out = ["\x1b[H\x1b[2J", "hikyaku ring  [o]開く [c]閉じる [+/-]音量 [0-3]置き方 [r]範囲リセット [q]終了\r\n\r\n"]
+        out = ["\x1b[H\x1b[2J", "hikyaku ring  [o]開く [c]閉じる [+/-]音量 [0-3]置き方 [i]スクロール反転 [p]送り先 [r]範囲リセット [q]終了\r\n\r\n"]
         out += ["  " + "".join(row) + "\r\n" for row in grid]
         rot = "?" if self.rotation is None else f"{self.rotation}°"
         out.append(f"\r\n  状態: {'開' if self.open else '閉'}  触れている: {'はい' if self.touching else 'いいえ'}  置き方: {rot}\r\n")
@@ -163,6 +167,10 @@ async def main() -> int:
                     await client.write_gatt_char(CTRL, bytes([OPEN]), response=True)
                 elif k == "c":
                     await client.write_gatt_char(CTRL, bytes([CLOSE]), response=True)
+                elif k == "i" and view.scroll_invert is not None:
+                    await client.write_gatt_char(CTRL, bytes([0x22, 0 if view.scroll_invert else 1]), response=True)
+                elif k == "p" and view.profile is not None:
+                    await client.write_gatt_char(CTRL, bytes([0x23, 1 - view.profile]), response=True)
                 elif k in "0123":
                     await client.write_gatt_char(CTRL, bytes([0x20, int(k)]), response=True)
                 elif k in "+-":

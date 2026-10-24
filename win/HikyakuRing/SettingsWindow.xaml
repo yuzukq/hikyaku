@@ -1,0 +1,82 @@
+<Window x:Class="Hikyaku.Ring.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="hikyaku リングの設定" Width="680" Height="500" ResizeMode="CanMinimize"
+        WindowStartupLocation="CenterScreen" FontFamily="Yu Gothic UI, Segoe UI" FontSize="13">
+  <TabControl Margin="8">
+    <TabItem Header="項目">
+      <Grid Margin="8">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="220" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <ListBox x:Name="ItemList" SelectionChanged="OnItemSelected" />
+        <StackPanel Grid.Column="1" Margin="16,0,0,0">
+          <TextBlock Text="名前" />
+          <TextBox x:Name="NameBox" Margin="0,2,0,10" TextChanged="OnNameChanged" />
+          <TextBlock Text="アイコン（Segoe Fluent Icons の文字コード。例: E767 = 音量）" />
+          <StackPanel Orientation="Horizontal" Margin="0,2,0,10">
+            <TextBox x:Name="GlyphBox" Width="120" TextChanged="OnGlyphChanged" />
+            <TextBlock x:Name="GlyphPreview" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="22" Margin="12,0,0,0" VerticalAlignment="Center" />
+          </StackPanel>
+          <TextBlock Text="アクション" />
+          <ComboBox x:Name="KindBox" Margin="0,2,0,10" SelectionChanged="OnKindChanged" />
+          <StackPanel x:Name="KeysPanel">
+            <TextBlock Text="キー" />
+            <StackPanel Orientation="Horizontal" Margin="0,2,0,6">
+              <TextBlock x:Name="KeysLabel" FontFamily="Consolas" FontSize="15" MinWidth="160" VerticalAlignment="Center" />
+              <Button x:Name="RecordButton" Content="記録" Padding="12,2" Click="OnRecord" />
+            </StackPanel>
+            <TextBlock Text="修飾キー（Win+キーのように Windows が先に取るキーは、キーだけ記録してここで足す）" TextWrapping="Wrap" Foreground="Gray" />
+            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+              <ToggleButton x:Name="CtrlToggle" Content="Ctrl" Padding="10,2" Margin="0,0,4,0" Click="OnModifierToggled" />
+              <ToggleButton x:Name="AltToggle" Content="Alt" Padding="10,2" Margin="0,0,4,0" Click="OnModifierToggled" />
+              <ToggleButton x:Name="ShiftToggle" Content="Shift" Padding="10,2" Margin="0,0,4,0" Click="OnModifierToggled" />
+              <ToggleButton x:Name="WinToggle" Content="Win" Padding="10,2" Click="OnModifierToggled" />
+            </StackPanel>
+          </StackPanel>
+          <StackPanel x:Name="MediaPanel">
+            <TextBlock Text="キー" />
+            <ComboBox x:Name="MediaBox" Margin="0,2,0,0" SelectionChanged="OnMediaChanged" />
+          </StackPanel>
+          <StackPanel x:Name="KnobPanel">
+            <TextBlock Text="調整するもの" />
+            <ComboBox x:Name="KnobBox" Margin="0,2,0,0" SelectionChanged="OnKnobChanged" />
+          </StackPanel>
+        </StackPanel>
+      </Grid>
+    </TabItem>
+    <TabItem Header="調整">
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel x:Name="TuningPanel" Margin="12" />
+      </ScrollViewer>
+    </TabItem>
+    <TabItem Header="本体の向き">
+      <StackPanel Margin="16" HorizontalAlignment="Center">
+        <TextBlock Text="hikyaku を置いている向きを選んでください（机の奥が上）。カーソル・スクロール・リングの向きが合います。"
+                   TextWrapping="Wrap" Foreground="Gray" TextAlignment="Center" Margin="0,0,0,16" />
+        <StackPanel x:Name="RotationPanel" Orientation="Horizontal" HorizontalAlignment="Center" />
+        <TextBlock x:Name="RotationNote" Foreground="Gray" Margin="0,16,0,0" TextAlignment="Center" />
+      </StackPanel>
+    </TabItem>
+    <TabItem Header="送り先">
+      <StackPanel Margin="16">
+        <TextBlock x:Name="StatusText" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <TextBlock x:Name="ProfileText" Margin="0,0,0,12" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+          <Button x:Name="Profile1Button" Content="1 台目（hikyaku）に切り替え" Padding="12,4" Margin="0,0,8,0" Click="OnSwitchProfile1" />
+          <Button x:Name="Profile2Button" Content="2 台目（hikyaku2）に切り替え" Padding="12,4" Click="OnSwitchProfile2" />
+        </StackPanel>
+        <CheckBox x:Name="ScrollInvertBox" Content="この送り先でスクロールを反転する（Mac のナチュラルスクロールと同じ向き）"
+                  Click="OnScrollInvertClicked" Margin="0,0,0,16" />
+        <TextBlock TextWrapping="Wrap" Foreground="Gray">
+          hikyaku は送り先ごとに別の機器（hikyaku / hikyaku2）として、1 台ずつつながります。切り替えると hikyaku は再起動して、
+          もう一方の送り先につなぎ直します（数秒かかり、この PC との接続は切れます）。
+          キーボードの F21 / F22、または本体のボタンをパッドに触れずに 3 秒押し続けても切り替えられます。
+        </TextBlock>
+        <CheckBox x:Name="AutostartBox" Content="Windows の起動時にこのアプリを開始する" Click="OnAutostartClicked" Margin="0,20,0,0" />
+        <TextBlock x:Name="LogText" Foreground="Gray" Margin="0,8,0,0" TextWrapping="Wrap" />
+      </StackPanel>
+    </TabItem>
+  </TabControl>
+</Window>
