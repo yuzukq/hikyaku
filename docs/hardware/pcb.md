@@ -15,7 +15,7 @@ ESP32-S3・CH9102F・FFC 変換基板の部品を 1 枚に移植することは�
 | J2 | S3 SuperMini の右列（5V, GND, 3V3, GP13〜GP8） | 同上 | 1 番 = 5V（USB-C 側）。**J1 との間隔は中心で 15.24mm**。部品面から見て J1 が左 |
 | J3 | FFC 12P 変換基板 | `Connector_PinSocket_2.54mm:PinSocket_2x06_P2.54mm_Vertical` | 2 列 × 6 本。向きは下記 |
 | J4 | 秋月 AE-CH9102F-TYPEC-BO | `Connector_PinSocket_2.54mm:PinSocket_2x04_P2.54mm_Vertical` | CN2 と CN3 をまとめて受ける |
-| SW1 | MX スイッチ（GPIO6） | `kbd_SW:CherryMX_Hotswap_1u` | Kailh ソケットのパッドは裏面（B.Cu） |
+| SW1 | MX スイッチ（GPIO6） | `kbd_SW:CherryMX_Solder_1u` | スイッチを基板に直接はんだ付け（部品点数を減らすため、ホットスワップソケットはやめた） |
 | SW2 | MX スイッチ（GPIO7） | 同上 | **ファームは未対応** |
 
 `kbd_SW` は Salicylic Acid さんのライブラリ（`~/develop/custom-keyboard/kicad/libs/KiCAD_FootPrint/kbd_SW.pretty`）。
