@@ -326,14 +326,14 @@
 	(footprint "Connector_PinSocket_2.54mm:PinSocket_1x09_P2.54mm_Vertical"
 		(layer "F.Cu")
 		(uuid "2d0bd0e0-baed-4229-9cd7-d15472bebc32")
-		(at 58 145 90)
+		(at 55.76 145 90)
 		(descr "Through hole straight socket strip, 1x09, 2.54mm pitch, single row (from Kicad 4.0.7), script generated")
 		(tags "Through hole socket strip THT 1x09 2.54mm single row")
 		(property "Reference" "J1"
 			(at 0 -2.77 90)
 			(layer "F.SilkS")
 			(hide yes)
-			(uuid "766164ef-e08c-46de-8de5-099c989cc643")
+			(uuid "31effe65-8694-4b7f-8d2d-e8e8488da4d7")
 			(effects
 				(font
 					(size 1 1)
@@ -344,7 +344,7 @@
 		(property "Value" "S3_Left(TX..GP7)"
 			(at 3 5 0)
 			(layer "F.SilkS")
-			(uuid "5b4f638d-b768-448d-a9c8-a58d6bcf550c")
+			(uuid "93355aed-129e-4d0f-8b17-79f4e4666b05")
 			(effects
 				(font
 					(size 1 1)
@@ -356,7 +356,7 @@
 			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "7848d837-2c33-4683-b1d3-99c38bc97edd")
+			(uuid "6a3d647b-955d-4e21-9e2d-fdfbe33c7928")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -367,7 +367,7 @@
 			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "2ec6fb77-e4dd-4b57-bd63-1a5c13381671")
+			(uuid "13e72a38-1881-45ae-96eb-34685c34f319")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -674,14 +674,14 @@
 	(footprint "Connector_PinSocket_2.54mm:PinSocket_2x06_P2.54mm_Vertical"
 		(layer "F.Cu")
 		(uuid "2da52f69-d372-4c0a-8c0f-334637079e4f")
-		(at 94.08 115.27 -90)
+		(at 92.142893 115.27 -90)
 		(descr "Through hole straight socket strip, 2x06, 2.54mm pitch, double rows (from Kicad 4.0.7), script generated")
 		(tags "Through hole socket strip THT 2x06 2.54mm double row")
 		(property "Reference" "J3"
 			(at -1.27 -2.77 90)
 			(layer "F.SilkS")
 			(hide yes)
-			(uuid "cd39332d-7491-4997-babf-6a579f2058da")
+			(uuid "e58c58b2-2f1d-4d7e-87ba-3d703a465f86")
 			(effects
 				(font
 					(size 1 1)
@@ -692,7 +692,7 @@
 		(property "Value" "FFC_12P_Adapter"
 			(at -4.84 6.54 0)
 			(layer "F.SilkS")
-			(uuid "e1d75134-c054-4d82-ab63-c8a8ea2c23c2")
+			(uuid "a220a6c3-dcdb-4974-8b52-38c66925ada0")
 			(effects
 				(font
 					(size 1 1)
@@ -704,7 +704,7 @@
 			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "1f11c26b-39a6-43f1-b8c1-fd16bd508da6")
+			(uuid "7dec7a4d-5b10-4084-ab68-19c1cdf345d2")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -715,7 +715,7 @@
 			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "44015175-f07a-4283-b95f-f7b554406b5c")
+			(uuid "d368ebed-ae18-468b-970f-deece4f6c98a")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1075,14 +1075,14 @@
 	(footprint "Connector_PinSocket_2.54mm:PinSocket_1x09_P2.54mm_Vertical"
 		(layer "F.Cu")
 		(uuid "42fbb8a8-ad76-43bf-9ce7-1cc618aaf421")
-		(at 58 129.76 90)
+		(at 55.76 129.76 90)
 		(descr "Through hole straight socket strip, 1x09, 2.54mm pitch, single row (from Kicad 4.0.7), script generated")
 		(tags "Through hole socket strip THT 1x09 2.54mm single row")
 		(property "Reference" "J2"
 			(at 0 -2.77 90)
 			(layer "F.SilkS")
 			(hide yes)
-			(uuid "08dd29a5-d4ea-4770-b79c-ca3a902b40cd")
+			(uuid "66cf6d69-a26b-4c55-a9ea-1097e48b345d")
 			(effects
 				(font
 					(size 1 1)
@@ -1093,7 +1093,7 @@
 		(property "Value" "S3_Right(5V..GP8)"
 			(at 2.76 5 0)
 			(layer "F.SilkS")
-			(uuid "3d2d1b46-8741-4a4c-855f-7e7463ff3d87")
+			(uuid "262acb1a-d41a-402d-936c-ab7f1f6cde24")
 			(effects
 				(font
 					(size 1 1)
@@ -1105,7 +1105,7 @@
 			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "906a9763-73e7-4dfb-b5eb-8f386964a084")
+			(uuid "f446658d-08d1-4d47-9fe8-b195a9a73ce0")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1116,7 +1116,7 @@
 			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "1bf61b59-bf41-4586-9b2b-99191d463ea0")
+			(uuid "a00e7732-56a1-4390-8d95-37f8149ca16b")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1423,14 +1423,14 @@
 	(footprint "Connector_PinSocket_2.54mm:PinSocket_2x04_P2.54mm_Vertical"
 		(layer "F.Cu")
 		(uuid "d7e67066-818d-4f62-bb5c-b7dd17cf6887")
-		(at 91.08 103 -90)
+		(at 89.602893 103 -90)
 		(descr "Through hole straight socket strip, 2x04, 2.54mm pitch, double rows (from Kicad 4.0.7), script generated")
 		(tags "Through hole socket strip THT 2x04 2.54mm double row")
 		(property "Reference" "J4"
 			(at -1.27 -2.77 90)
 			(layer "F.SilkS")
 			(hide yes)
-			(uuid "13241664-864d-4e7d-8308-60e366872985")
+			(uuid "0264b811-43b7-446d-9243-dc5f949a0ef1")
 			(effects
 				(font
 					(size 1 1)
@@ -1440,8 +1440,8 @@
 		)
 		(property "Value" "CH9102F_Module"
 			(at -5.19 4.27 0)
-			(layer "F.Fab")
-			(uuid "4240ad2d-7a42-44c8-aa17-88532ccfcd6a")
+			(layer "F.SilkS")
+			(uuid "a1fabb49-bcb2-4592-9dd4-3e89fd50d5e4")
 			(effects
 				(font
 					(size 1 1)
@@ -1453,7 +1453,7 @@
 			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "8f731007-1570-4c32-9664-79f8a3146f60")
+			(uuid "69f69146-e657-4033-9874-dedf6ec40eec")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1464,7 +1464,7 @@
 			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "523f7814-7067-47ad-ac5a-96da07904f78")
+			(uuid "886f649c-55fa-429a-b4a3-4a11e969ab99")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2014,28 +2014,40 @@
 		)
 	)
 	(gr_line
-		(start 55 96)
-		(end 55 148)
+		(start 54 101)
+		(end 54 146)
 		(stroke
 			(width 0.05)
-			(type default)
+			(type solid)
 		)
 		(layer "Edge.Cuts")
 		(uuid "c817354d-dc4f-491d-a2d2-53f3f2da1521")
 	)
-	(gr_line
-		(start 55 96)
-		(end 117 96)
+	(gr_arc
+		(start 54 101)
+		(mid 55.464466 97.464466)
+		(end 59 96)
 		(stroke
 			(width 0.05)
 			(type default)
 		)
 		(layer "Edge.Cuts")
-		(uuid "4e68b3da-1c6e-4d16-bdb7-926d12108784")
+		(uuid "349e8352-0128-4291-82dc-8039ad7b06a7")
+	)
+	(gr_arc
+		(start 56 148)
+		(mid 54.585786 147.414214)
+		(end 54 146)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "c10ffa8a-fdf7-4bfb-bf36-2101ce97482f")
 	)
 	(gr_line
-		(start 55 148)
-		(end 117 148)
+		(start 56 148)
+		(end 115 148)
 		(stroke
 			(width 0.05)
 			(type default)
@@ -2044,8 +2056,60 @@
 		(uuid "b12882ee-c947-4080-9e67-fe455e40ec4c")
 	)
 	(gr_line
-		(start 117 148)
-		(end 117 96)
+		(start 59 96)
+		(end 112 96)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "4e68b3da-1c6e-4d16-bdb7-926d12108784")
+	)
+	(gr_line
+		(start 112 96)
+		(end 112.585786 96)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "c8eec112-e0d4-454f-9f07-c0f373f8f5a0")
+	)
+	(gr_arc
+		(start 112.585786 96)
+		(mid 116.12132 97.464466)
+		(end 117.585786 101)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "d95d468b-786a-4f28-b704-fb491a25ea1a")
+	)
+	(gr_line
+		(start 115 148)
+		(end 115.585786 148)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "f4c55647-1ebc-40c3-9047-f8f1b79a91e9")
+	)
+	(gr_arc
+		(start 117.585786 146)
+		(mid 117 147.414214)
+		(end 115.585786 148)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "d65d8bdf-6c63-4b9f-9eae-b3dfbcb2af97")
+	)
+	(gr_line
+		(start 117.585786 146)
+		(end 117.585786 101)
 		(stroke
 			(width 0.05)
 			(type default)
