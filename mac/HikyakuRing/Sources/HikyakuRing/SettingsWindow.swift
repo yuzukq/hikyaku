@@ -20,8 +20,12 @@ final class SettingsWindow {
     }
 
     func show() {
-        // Dock に出ない（LSUIElement）アプリなので、前に出すには自分を有効にする
-        NSApp.activate()
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        // Dock に出ない（LSUIElement）アプリなので、前に出してキー入力を受けるには自分を有効にする。
+        // リングから開くときは、ほかのアプリを使っている最中なので、NSApp.activate()（macOS 14 からの協調的なアクティベーション）は
+        // 断られ、orderFrontRegardless を足しても、設定画面はそのアプリのウィンドウの裏に出る（デスクトップで確認）。
+        // 非推奨だが、ignoringOtherApps で強く有効にする（フルスクリーンのアプリの上でも前に出ることを確認）
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }
 }

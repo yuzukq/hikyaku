@@ -1,4 +1,9 @@
 // リングを出す透明なパネル。フォーカスを奪わず、マウスも受けない（操作はすべてパッドから）。
+//
+// フルスクリーンのアプリの上にも出す。それには、Dock に出ない（LSUIElement）アプリの nonactivating な NSPanel で、
+// レベルを .screenSaver にし、.canJoinAllApplications を付ける（Apple の回答: https://developer.apple.com/forums/thread/826308 ）。
+// .floating・.statusBar・.popUpMenu では、フルスクリーンのアプリの裏に隠れて見えない（ファームはリングを開いているので、
+// 見えないまま触ると項目が実行されてしまう。RingController が isOnScreen で止める）。
 
 import AppKit
 import SwiftUI
@@ -16,8 +21,8 @@ final class OverlayPanel {
             backing: .buffered,
             defer: true
         )
-        panel.level = .popUpMenu
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -25,6 +30,11 @@ final class OverlayPanel {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.contentView = NSHostingView(rootView: RingOverlayView(controller: controller))
+    }
+
+    /// 少なくとも一部が画面に見えているか（ほかのウィンドウの裏に隠れている・今のデスクトップにないなら false）。
+    var isOnScreen: Bool {
+        panel.isVisible && panel.occlusionState.contains(.visible)
     }
 
     /// カーソルを中心に出す。画面の端では、はみ出さないようにずらす。
