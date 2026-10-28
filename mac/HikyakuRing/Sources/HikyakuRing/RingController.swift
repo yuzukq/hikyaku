@@ -120,12 +120,22 @@ final class RingController {
                 readoutRefresh?.cancel()
                 overlay.hide()
             case .run(let item):
+                // リングが見えないまま選ばれた（ほかのウィンドウの裏に隠れていたなど）ものは、見ずに選んだのと同じなので実行しない
+                guard overlay.isOnScreen else {
+                    log.error("ring is not on screen; not running item \(item)")
+                    continue
+                }
                 if config.items[item].action == .openSettings {
                     showSettings()
                 } else {
                     actions.run(config.items[item].action)
                 }
             case .enterKnob(let item):
+                guard overlay.isOnScreen else {
+                    log.error("ring is not on screen; closing instead of entering the knob \(item)")
+                    closeRing()
+                    continue
+                }
                 if case .knob(let kind) = config.items[item].action {
                     knobReadout = actions.readout(kind, tuning: config.tuning)
                 }
