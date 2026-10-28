@@ -1,4 +1,4 @@
-// Win32 の呼び出し（リングの窓の位置・スタイル、全体のホットキー）。
+// Win32 の呼び出し（リングの窓の位置・スタイル、全体のホットキー、設定画面を前に出す）。
 
 using System;
 using System.Runtime.InteropServices;
@@ -71,4 +71,19 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern bool UnregisterHotKey(IntPtr hwnd, int id);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    public static extern bool AttachThreadInput(uint attach, uint attachTo, bool on);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
 }

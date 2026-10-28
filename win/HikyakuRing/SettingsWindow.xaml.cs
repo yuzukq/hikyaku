@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using Hikyaku.RingCore;
 using Microsoft.Win32;
@@ -52,8 +53,27 @@ public partial class SettingsWindow : Window
     {
         Show();
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
-        Activate();
+        BringToFront();
         _controller.RequestSettings();
+    }
+
+    /// <summary>
+    /// ほかのアプリの窓より前に出して、キー入力も受けられるようにする。リングから開くときは、使っている最中のアプリが前にいて
+    /// （最後に入力を受けたのもそのアプリ）、Windows は Activate を断る。すでに開いている窓はそのアプリの裏に残る（タスクバーで点滅するだけ）。
+    /// </summary>
+    private void BringToFront()
+    {
+        // 一瞬だけ最前面にして、ほかのアプリの窓の上に出す（重なりの順番を変えるのは断られない）
+        Topmost = true;
+        Topmost = false;
+        // 前にいるアプリのスレッドと入力をつないでいる間は、前に出るのを断られない
+        var hwnd = new WindowInteropHelper(this).Handle;
+        var foreground = NativeMethods.GetWindowThreadProcessId(NativeMethods.GetForegroundWindow(), out _);
+        var mine = NativeMethods.GetCurrentThreadId();
+        var attached = foreground != 0 && foreground != mine && NativeMethods.AttachThreadInput(mine, foreground, true);
+        NativeMethods.SetForegroundWindow(hwnd);
+        if (attached) NativeMethods.AttachThreadInput(mine, foreground, false);
+        Activate();
     }
 
     private RingItem Item => _controller.Config.Items[_selected];
