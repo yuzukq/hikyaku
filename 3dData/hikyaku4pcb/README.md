@@ -7,6 +7,7 @@ PCB 版（`pcb/`）のケース。Fusion のスクリプトで、ガーバーの
 |---|---|
 | `hikyaku4pcb_case/hikyaku4pcb_case.py` | Fusion のスクリプト。寸法はすべて冒頭の「パラメータ」 |
 | `preview.py` | 同じ手順を manifold3d で実行し、`stl/` と `preview_*.png` を作る（Fusion なしで形と干渉を確かめる用） |
+| `run_in_fusion.py` | 起動中の Fusion に MCP 経由で同じ手順を実行させる（ターミナルから作り直す用） |
 | `stl/` | 部品ごとの STL（Z 上向き、mm）。いまのパラメータの形 |
 
 ![組み立て](preview_assembled.png)
@@ -31,6 +32,23 @@ PCB 版（`pcb/`）のケース。Fusion のスクリプトで、ガーバーの
 - 座標は、原点 = 基板の左下（KiCad の (54, 148)）、Z = 0 が基板の下面。Fusion が **Y 上向き**の設定なら、自動で回して作る（`UP` で固定もできる）。
 - 開いているファイル名に `hikyaku4pcb` が入っていなければ、作る前に確認が出る。
 - フィレット（ふたの上の縁 R1、底の縁 R1、リングの上の縁 R0.5）は Fusion でだけ付ける。付けられなかったときは最後のメッセージに出る。
+
+2026-11-05 に Fusion（Y 上向きの設定）で実行して、エラー・警告・壊れたフィーチャなしで作れた。フィレットも全部付いた。
+体積は manifold3d の版（`stl/`）とほぼ同じで、差はフィレットで削れる分だけ（Bottom −58、Cover −57、TrackpadRing −10 mm3）。
+Fusion の干渉チェックでも、ケースと仮の箱は重ならない（重なるのは仮の箱どうしの MX の上部とキーキャップだけ）。
+
+### ターミナルから作る（Fusion の MCP サーバー）
+
+Fusion の基本設定の「一般」→「Fusion MCP サーバ」を有効にしておくと、Fusion が `http://127.0.0.1:27182/mcp` で待ち受ける。
+hikyaku4pcb を開いた状態で、
+
+```bash
+python3 run_in_fusion.py                 # 作り直す（警告と各ボディの体積を出す）
+python3 run_in_fusion.py --shot out.png  # 作り直して、スクリーンショットも保存
+```
+
+スクリプトとアドインから実行するのと同じものができる。保存はしないので、残すときは Fusion で保存する。
+Claude Code から Fusion を直接操作するなら `claude mcp add --transport http fusion http://127.0.0.1:27182/mcp` で登録する。
 
 ## 形の決め方
 
