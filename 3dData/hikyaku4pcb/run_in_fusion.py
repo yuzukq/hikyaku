@@ -2,7 +2,7 @@
 """起動中の Fusion に、MCP サーバー経由で hikyaku4pcb_case.py の build() を実行させる。
 
 Fusion の「スクリプトとアドイン」から実行するのと同じものができる。違いは 2 つ:
-  - 開いているドキュメントの中から hikyaku4pcb を探して、それをアクティブにしてから作る
+  - 開いているドキュメントの中から、名前に hikyaku4pcb が入っているものを探して、それをアクティブにしてから作る
   - 結果のメッセージボックスを出さず、警告・壊れたフィーチャ・各ボディの体積（mm3）を標準出力に出す
 
     python3 run_in_fusion.py                # 作り直す
@@ -26,7 +26,7 @@ RUN = '''
 def run(_context: str):
     import time
     app = adsk.core.Application.get()
-    docs = [d for d in app.documents if d.name == "%(doc)s"]
+    docs = [d for d in app.documents if "%(doc)s" in d.name]
     if len(docs) != 1:
         raise RuntimeError("%(doc)s を開いてください（開いているもの: %%s）" %% [d.name for d in app.documents])
     docs[0].activate()
