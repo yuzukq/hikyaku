@@ -1,0 +1,10 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"script",
+	"author":	"hikyaku",
+	"description":	{
+		"":	"hikyaku4pcb のケース（底・ふた・トラックパッドのリング）を組み立てる"
+	},
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true
+}

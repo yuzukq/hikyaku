@@ -15,3 +15,6 @@ _autosave-*
 *.kicad_sym-bak
 # KiCad: generated outputs (gerbers, drill, BOM, plots). Regenerate with kicad-cli.
 pcb/out/
+
+# Python venv (3dData/hikyaku4pcb/preview.py)
+.venv/
